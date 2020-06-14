@@ -108,6 +108,7 @@ do
     local dead  = { _count = 0 }
     local shaman = { _count = 0 }
     local non_shaman = { _count = 0 }
+    local spectator = { _count = 0 }  -- TODO
 
     local players_insert = function(where, playerName)
         if not where[playerName] then
@@ -131,6 +132,7 @@ do
         dead = dead,
         shaman = shaman,
         non_shaman = non_shaman,
+        spectator = spectator,
         add = players_insert,
         remove = players_remove
     }
@@ -148,22 +150,30 @@ do
         new_game_vars.difficulty = diff
 
         for _,name in ipairs(player_state.shaman) do
-            print(name.." set 0")
+            players[name].internal_score = 0
             tfm.exec.setPlayerScore(name, 0)
         end
-        local pool = {}
-        for name, p in pairs(tfm.get.room.playerList) do
-            if not player_state.shaman[name] and p.score == 5 then  -- TODO
-                pool[#pool+1] = name
+
+        local highest = {-1}
+        local second_highest = nil
+        for _,name in ipairs(player_state.room) do
+            if not player_state.shaman[name] then
+                players[name].internal_score = players[name].internal_score + 1
+                if players[name].internal_score >= highest[1] then
+                    second_highest = highest[2]
+                    highest[1] = players[name].internal_score
+                    highest[2] = name
+                end
             end
         end
-        if #pool == 0 then
-            for name in pairs(tfm.get.room.playerList) do
-                tfm.exec.setPlayerScore(name, 5)
-                pool[#pool+1] = name
-            end
+
+        tfm.exec.setPlayerScore(highest[2], 100)
+        if players[highest[2]].pair then
+            tfm.exec.setPlayerScore(players[highest[2]].pair, 100)
+        else
+            tfm.exec.setPlayerScore(second_highest, 100) -- TODO: prioritise the pre-defined pair or soulmate
         end
-        tfm.exec.setPlayerScore(pool[math.random(1,#pool)], 10)
+
         map_sched.load(map)
     end
     
@@ -447,7 +457,92 @@ cmds = {
         end,
         perms = GROUP_STAFF
     },
+    pair = {
+        func = function(pn, m, w1, w2, w3)
+            if w2 then
+                local target = pFind(w2)
+                if target then  -- TODO: and player is not already paired up
+                    tfm.exec.chatMessage("Your request to pair up has been sent to "..target, pn)
+                    tfm.exec.chatMessage(pn.." is requesting to pair up with you. Type !accept or !reject to respond.", target)
+                end
+            end
+        end,
+        perms = GROUP_PLAYER
+    },
+    pair = {
+        func = function(pn, m, w1, w2, w3)
+            if players[pn].request_to then
+                tfm.exec.chatMessage("<R>You may not have more than one pending request!", pn)
+                return
+            end
+            if w2 then
+                local target = pFind(w2)
+                if not target then return end
+                if not players[target].request_from then  -- TODO: and player is not already paired up
+                    tfm.exec.chatMessage("Your request to pair up has been sent to "..target, pn)
+                    tfm.exec.chatMessage(pn.." is requesting to pair up with you. Type !accept or !reject to respond.", target)
+                    players[pn].request_to = target
+                    players[target].request_from = pn
+                else
+                    tfm.exec.chatMessage("<R>You may not request to pair with this player at the moment.", pn)
+                end
+            end
+        end,
+        perms = GROUP_PLAYER
+    },
+    accept = {
+        func = function(pn, m, w1, w2)
+            if players[pn].request_from then
+                local target = players[pn].request_from
+                if players[target].pair then
+                    players[target].request_to = nil
+                    tfm.exec.chatMessage("<R>You may not pair with this player at the moment.", pn)
+                    return
+                end
+                tfm.exec.chatMessage("You are now paired with "..target, pn)
+                tfm.exec.chatMessage("You are now paired with "..pn, target)
+                players[pn].request_from = nil
+                players[target].request_to = nil
+                players[pn].pair = target
+                players[target].pair = pn
+            end
+        end,
+        perms = GROUP_PLAYER
+    },
+    reject = {
+        func = function(pn, m, w1, w2)
+            local target = players[pn].request_from
+            if target then
+                players[target].request_to = nil
+                players[pn].request_from = nil
+                tfm.exec.chatMessage("Rejected "..target.."'s request.", pn)
+                tfm.exec.chatMessage(pn.." rejected your request.", target)
+            end
+        end,
+        perms = GROUP_PLAYER
+    },
+    cancel = {
+        func = function(pn, m, w1, w2)
+            if players[pn].pair then
+                local target = players[pn].pair
+                tfm.exec.chatMessage("You are no longer paired.", pn)
+                tfm.exec.chatMessage(pn.." no longer wants to pair with you.", target)
+                players[target].pair = nil
+                players[pn].pair = nil
+            else
+                local target = players[pn].request_to
+                if target then
+                    players[target].request_from = nil
+                    players[pn].request_to = nil
+                    tfm.exec.chatMessage("Cancelled request.", pn)
+                    tfm.exec.chatMessage(pn.." has cancelled the request.", target)
+                end
+            end
+        end,
+        perms = GROUP_PLAYER
+    },
 }
+
 -- NOTE: It is possible for players to alter callback strings, ensure
 -- that callbacks are designed to protect against bad inputs!
 callbacks = {
@@ -495,14 +590,8 @@ local ReadXML = function()
 end
 
 local UpdateTurnUI = function()
-    local color, shaman
-    if roundv.is_blue_turn then
-        color = "CH"
-        shaman = roundv.shaman.blue
-    else
-        color = "font color='#FEB1FC'"
-        shaman = roundv.shaman.pink
-    end
+    local color = "CH"
+    local shaman = player_state.shaman[roundv.shaman_turn]
     ui.setShamanName(string.format("<%s>%s's <J>Turn", color, shaman))
 end
 
@@ -560,11 +649,7 @@ function eventNewGame()
             author = tfm.get.room.xmlMapInfo.author,
             code = tonumber(tfm.get.room.currentMap:match('%d+'))
         },
-        shaman = {
-            blue = nil,
-            pink = nil
-        },
-        is_blue_turn = true,  -- true if it's the blue sham's turn, false if it's the pink sham's turn
+        shaman_turn = 1,
         difficulty = new_game_vars.difficulty or 0,
         phase = 0,
     }
@@ -576,20 +661,13 @@ function eventNewGame()
     for name, p in pairs(tfm.get.room.playerList) do
         local tbl = p.isShaman and player_state.shaman or player_state.non_shaman
         player_state.add(tbl, name)
-        if p.isShaman then
-            if not roundv.shaman.blue then
-                roundv.shaman.blue = name
-            elseif not roundv.shaman.pink then
-                roundv.shaman.pink = name
-            end
-        end
     end
 
     tfm.exec.setGameTime(180)
     ReadXML()
     ShowMapInfo()
     if player_state.shaman._count == 2 then
-        tfm.exec.chatMessage(string.format("<ROSE>Ξ <CH>%s <ROSE>& <font color='#FEB1FC'>%s <ROSE>are now the shaman pair!", roundv.shaman.blue, roundv.shaman.pink))
+        tfm.exec.chatMessage(string.format("<ROSE>Ξ <CH>%s <ROSE>& <font color='#FEB1FC'>%s <ROSE>are now the shaman pair!", player_state.shaman[1], player_state.shaman[2]))
     else
         tfm.exec.chatMessage("<R>Ξ No shaman pair!")
     end
@@ -606,6 +684,7 @@ function eventNewPlayer(pn)
         keys = {},
         lang = "en",
         group = GROUP_PLAYER,
+        internal_score = 0,
     }
 	if translations[p.community] then
 		players[pn].lang = p.community
@@ -628,7 +707,7 @@ function eventNewPlayer(pn)
 
     tfm.exec.chatMessage("\t<VP>Ξ Welcome to <b>Team Shaman (TSM)</b> v1.0! Ξ\n<J>Also known as Team Hard Mode, TSM is a building module where dual shamans take turns to spawn objects.\nPress H for more information.\n<R>NOTE: <VP>For development purposes this module will only run Team Divine Mode tentatively. As the module starts picking up shape, we'll gradually implement Team Hard Mode.", pn)
 
-    tfm.exec.setPlayerScore(pn, 5)
+    tfm.exec.setPlayerScore(pn, 0)
     tfm.exec.setShamanMode(pn, 2)  -- Force divine for TDM
 end
 
@@ -656,8 +735,8 @@ end
 
 function eventSummoningStart(pn, type, xPos, yPos, angle)
     if type ~= 0 then
-        local is_blue_turn = roundv.is_blue_turn
-        if (is_blue_turn and pn ~= roundv.shaman.blue) or (not is_blue_turn and pn == roundv.shaman.blue) then
+        local rightful_turn = roundv.shaman_turn
+        if pn ~= player_state.shaman[rightful_turn] then
             --tfm.exec.chatMessage("<J>Ξ It is not your turn to spawn yet! Take a chill pill!", pn)
         end
     end
@@ -670,12 +749,12 @@ function eventSummoningEnd(pn, type, xPos, yPos, angle, desc)
         tfm.exec.moveObject(desc.id, xPos, yPos, false, 0, 0, false, angle, false)
     end
     if desc.baseType ~= 0 then
-        local is_blue_turn = roundv.is_blue_turn
-        if (is_blue_turn and pn ~= roundv.shaman.blue) or (not is_blue_turn and pn == roundv.shaman.blue) then
+        local rightful_turn = roundv.shaman_turn
+        if pn ~= player_state.shaman[rightful_turn] then
             tfm.exec.removeObject(desc.id)
             tfm.exec.chatMessage("<J>Ξ It is not your turn to spawn yet ya dummy!", pn)
-        elseif roundv.shaman.pink then
-            roundv.is_blue_turn = not is_blue_turn
+        else
+            roundv.shaman_turn = rightful_turn == 1 and 2 or 1
             UpdateTurnUI()
         end
     end
@@ -704,4 +783,4 @@ local init = function()
 end
 
 init()
-debug.disableEventLog(false)
+debug.disableEventLog(true)
