@@ -175,7 +175,7 @@ do
                     highest[2] = name
                 end
             end
-            tfm.exec.chatMessage("[dbg] int score "..name..": "..players[name].internal_score)
+            --tfm.exec.chatMessage("[dbg] int score "..name..": "..players[name].internal_score)
         end
 
         tfm.exec.setPlayerScore(highest[2], 100)
@@ -249,8 +249,8 @@ do
     local MUTUALLY_EXCLUSIVE = 2  -- window will close other mutually exclusive windows that are open
 
     local help_ta_range = {
-        ['Welcome'] = {WINDOW_HELP+11, WINDOW_HELP+12},
-        ['Contributors'] = {WINDOW_HELP+41, WINDOW_HELP+42},
+        ['Welcome'] = {WINDOW_HELP+21, WINDOW_HELP+22},
+        ['Contributors'] = {WINDOW_HELP+51, WINDOW_HELP+52},
     }  -- TODO: define somewhere more appropriate..
     -- WARNING: No error checking, ensure that all your windows have all the required attributes (open, close, type, players)
     local windows = {
@@ -263,27 +263,25 @@ do
                 if not tabs_k[tab] then return end
                 if not p_data.tab then
                     ui.addTextArea(WINDOW_HELP+1,"",pn,75,40,650,340,0x4c1130,0x4c1130,1,true)  -- the background
-                    local buttonstr = {}
-                    for _, v in pairs(tabs) do
-                        buttonstr[#buttonstr+1] = "<a href='event:help!"..v.."'>"..v.."</a>"
-                    end
-                    ui.addTextArea(WINDOW_HELP+2, GUI_BTN.."<p align='center'>"..table.concat(buttonstr,'                      '),pn,75,35,650,20,gui_bg,gui_b,gui_o,true)
-                    p_data.tab = tab
                 else  -- already opened before
                     if help_ta_range[p_data.tab] then
                         for i = help_ta_range[p_data.tab][1], help_ta_range[p_data.tab][1] do
                             ui.removeTextArea(i, pn)
                         end
                     end
-                    p_data.tab = tab
                 end
+                for i, v in pairs(tabs) do
+                    local opacity = (v == tab) and 0 or 1 
+                    ui.addTextArea(WINDOW_HELP+1+i, GUI_BTN.."<font size='2'><br><font size='12'><p align='center'><a href='event:help!"..v.."'>"..v.."</a>",pn,88+((i-1)*130),50,100,24,0x666666,0x676767,opacity,true)
+                end
+                p_data.tab = tab
 
                 if tab == "Welcome" then
                     local text = [[
 <p align="center"><font size='13'><ROSE>Welcome to #shamteam</font></p>
 <p align="left"><font size='12'><N>The gameplay is simple: You will pair with another shaman and take turns spawning objects. You earn points at the end of the round depending on mice saved. But be careful! If you make a mistake by spawning when it's not your turn, or dying, you and your partner will lose points! There will be mods that you can enable to make your gameplay a little bit more challenging, and should you win the round, your score will be multiplied accordingly. 
                     ]]
-                    ui.addTextArea(WINDOW_HELP+11,text,pn,75,80,650,nil,0,0,0,true)
+                    ui.addTextArea(WINDOW_HELP+21,text,pn,88,95,625,nil,0,0,0,true)
                 elseif tab == "Contributors" then
                     local text = [[
 <p align="center"><font size='13'><ROSE>Contributors</font></p>
@@ -298,15 +296,16 @@ Translators:
 <J>Pinoyboy#9999<N> (PH)
 A full list of mapcrew staff are available via the !mapcrew command. 
                     ]]
-                    ui.addTextArea(WINDOW_HELP+41,text,pn,75,80,650,nil,0,0,0,true)
+                    ui.addTextArea(WINDOW_HELP+51,text,pn,88,95,625,nil,0,0,0,true)
                 end
 
             end,
             close = function(pn, p_data)
-                ui.removeTextArea(WINDOW_HELP+1, pn)
-                ui.removeTextArea(WINDOW_HELP+2, pn)
+                for i = 1, 10 do
+                    ui.removeTextArea(WINDOW_HELP+i, pn)
+                end
                 if help_ta_range[p_data.tab] then
-                    for i = help_ta_range[p_data.tab][1], help_ta_range[p_data.tab][1] do
+                    for i = help_ta_range[p_data.tab][1], help_ta_range[p_data.tab][2] do
                         ui.removeTextArea(i, pn)
                     end
                 end
