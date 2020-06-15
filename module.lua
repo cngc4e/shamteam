@@ -12,7 +12,9 @@ local mapdb = {
     tdm = {
         {"1803400", "6684914", "3742299", "3630912"},
         {"1852359", "6244577"},
-        {"294822", "6400012"}
+        {"294822", "6400012"},
+        {"5417400", "2611862", "3292713", "3587523", "6114320", "1287411", "5479449", "1289915"},
+        {"1236698", "3833268", "7294988", "6971076"}
     }
 }
 
@@ -87,16 +89,17 @@ do
     local function load(code, mirror)
         queued_code = code
         queued_mirror = mirror
-        is_waiting = true
         if not call_after or call_after <= os.time() then
             is_waiting = false
             call_after = os.time() + 3000
             tfm.exec.newGame(code, mirror)
+        else
+            is_waiting = true
         end
     end
 
    local function run()
-        if is_waiting and (call_after or call_after <= os.time()) then
+        if is_waiting and call_after <= os.time() then
             call_after = nil
             load(queued_code, queued_mirror)
         end
@@ -192,7 +195,7 @@ do
     local function diedwon(type, pn)
         local allplayerdead = true
         local allnonshamdead = true
-        for name, p in pairs(tfm.get.room.playerList) do
+        for _, name in pairs(player_state.room) do
             if not player_state.dead[name] then allplayerdead = false end
             if not player_state.dead[name] and player_state.non_shaman[name] then allnonshamdead = false end
         end
