@@ -26,6 +26,7 @@ local GROUP_DEV = 5
 
 -- Windows
 local WINDOW_HELP = bit32.lshift(0, 8)
+local WINDOW_LOBBY = bit32.lshift(1, 8)
 
 -- GUI color defs
 local GUI_BTN = "<font color='#EDCC8D'>"
@@ -34,6 +35,11 @@ local GUI_BTN = "<font color='#EDCC8D'>"
 local keys, cmds, callbacks, sWindow
 
 ----- GENERAL UTILS
+local function math_round(num, dp)
+    local mult = 10 ^ (dp or 0)
+    return math.floor(num * mult + 0.5) / mult
+end
+
 local function string_split(str, delimiter)
 	local delimiter,a = delimiter or ',', {}
 	for part in str:gmatch('[^'..delimiter..']+') do
@@ -149,6 +155,10 @@ do
         until not roundv or tonumber(map) ~= roundv.mapinfo.code
         new_game_vars.difficulty = diff
 
+        map_sched.load(map)
+    end
+
+    local function lobby()
         for _,name in ipairs(player_state.shaman) do
             players[name].internal_score = 0
             tfm.exec.setPlayerScore(name, 0)
@@ -165,34 +175,29 @@ do
                     highest[2] = name
                 end
             end
+            tfm.exec.chatMessage("[dbg] int score "..name..": "..players[name].internal_score)
         end
 
         tfm.exec.setPlayerScore(highest[2], 100)
-        if players[highest[2]].pair then
+        if players[highest[2]] and players[highest[2]].pair then
             tfm.exec.setPlayerScore(players[highest[2]].pair, 100)
-        else
+        elseif second_highest then
             tfm.exec.setPlayerScore(second_highest, 100) -- TODO: prioritise the pre-defined pair or soulmate
         end
 
-        map_sched.load(map)
+        new_game_vars.lobby = true
+        map_sched.load('#8')
     end
     
     local function diedwon(type, pn)
-        if not roundv then
-            return
-        end
         local allplayerdead = true
         local allnonshamdead = true
-        local allshamdead = true
         for name, p in pairs(tfm.get.room.playerList) do
             if not player_state.dead[name] then allplayerdead = false end
             if not player_state.dead[name] and player_state.non_shaman[name] then allnonshamdead = false end
-            if player_state.shaman[name] then
-                if not player_state.dead[name] then allshamdead = false end
-            end
         end
         if allplayerdead then
-            rotate()
+            lobby()
         elseif allnonshamdead then
             if type=='won' then tfm.exec.setGameTime(20) end
             if roundv.mapinfo.Opportunist then  -- TODO: nil
@@ -201,24 +206,36 @@ do
                     tfm.exec.playerVictory(name)
                 end
             end
-        elseif allshamdead then
-            tfm.exec.setGameTime(20)
         end
     end
 
     local function died(pn)
+        if not roundv then
+            return
+        end
+        if player_state.shaman[pn] then
+            tfm.exec.setGameTime(20)
+        end
         diedwon('died', pn)
     end
 
     local function won(pn)
+        if not roundv then
+            return
+        end
         diedwon('won', pn)
     end
 
     local function timesup()
-        rotate()
+        if roundv.lobby then
+            rotate()
+        else
+            lobby()
+        end
     end
 
     rotate_evt = {
+        lobby = lobby,
         rotate = rotate,
         died = died,
         won = won,
@@ -298,10 +315,26 @@ A full list of mapcrew staff are available via the !mapcrew command.
             type = MUTUALLY_EXCLUSIVE,
             players = {}
         },
+        [WINDOW_LOBBY] = {
+            open = function(pn, p_data, tab)
+                ui.addTextArea(WINDOW_LOBBY+21,"<p align='center'><font size='32'><VI>20", nil, 370, 245, 50, nil,gui_bg,gui_b,gui_o,true)
+
+            end,
+            close = function(pn, p_data)
+                ui.removeTextArea(WINDOW_LOBBY+21)
+            end,
+            type = INDEPENDENT,
+            players = {}
+        },
     }
 
     sWindow.open = function(window_id, pn, ...)
         if not windows[window_id] then
+            return
+        elseif not pn then
+            for name in pairs(tfm.get.room.playerList) do
+                sWindow.open(window_id, name, table.unpack(arg))
+            end
             return
         elseif not windows[window_id].players[pn] then
             windows[window_id].players[pn] = {images={}, data={}}
@@ -318,7 +351,11 @@ A full list of mapcrew staff are available via the !mapcrew command.
     end
 
     sWindow.close = function(window_id, pn)
-        if sWindow.isOpened(window_id, pn) then
+        if not pn then
+            for name in pairs(tfm.get.room.playerList) do
+                sWindow.close(window_id, name)
+            end
+        elseif sWindow.isOpened(window_id, pn) then
             windows[window_id].players[pn].is_open = false
             windows[window_id].close(pn, windows[window_id].players[pn].data)
         end
@@ -408,7 +445,7 @@ cmds = {
     },
     skip = {
         func = function(pn)
-            if player_state.shaman[pn] then  -- TODO: both shams must vote!
+            if player_state.shaman[pn] or players[pn].group >= GROUP_STAFF then  -- TODO: both shams must vote!
                 rotate_evt.timesup()
             end
         end,
@@ -459,18 +496,6 @@ cmds = {
     },
     pair = {
         func = function(pn, m, w1, w2, w3)
-            if w2 then
-                local target = pFind(w2)
-                if target then  -- TODO: and player is not already paired up
-                    tfm.exec.chatMessage("Your request to pair up has been sent to "..target, pn)
-                    tfm.exec.chatMessage(pn.." is requesting to pair up with you. Type !accept or !reject to respond.", target)
-                end
-            end
-        end,
-        perms = GROUP_PLAYER
-    },
-    pair = {
-        func = function(pn, m, w1, w2, w3)
             if players[pn].request_to then
                 tfm.exec.chatMessage("<R>You may not have more than one pending request!", pn)
                 return
@@ -478,7 +503,11 @@ cmds = {
             if w2 then
                 local target = pFind(w2)
                 if not target then return end
-                if not players[target].request_from then  -- TODO: and player is not already paired up
+                if players[pn].pair then
+                    tfm.exec.chatMessage("<R>You may not request to pair until you have unpaired your current partner by typing !cancel", pn)
+                    return
+                end
+                if not players[target].request_from and not players[target].pair then  -- TODO: and player is not already paired up
                     tfm.exec.chatMessage("Your request to pair up has been sent to "..target, pn)
                     tfm.exec.chatMessage(pn.." is requesting to pair up with you. Type !accept or !reject to respond.", target)
                     players[pn].request_to = target
@@ -624,6 +653,9 @@ function eventLoop(elapsed, remaining)
         rotate_evt.timesup()
         roundv.phase = 3
     end
+    if roundv.lobby then
+        ui.updateTextArea(WINDOW_LOBBY+21,"<p align='center'><font size='32'><VI>"..math_round(remaining/1000,0), nil)
+    end
 end
 
 function eventMouse(pn, x, y)
@@ -652,6 +684,7 @@ function eventNewGame()
         shaman_turn = 1,
         difficulty = new_game_vars.difficulty or 0,
         phase = 0,
+        lobby = new_game_vars.lobby,
     }
     new_game_vars = {}
     player_state.dead = { _count = 0 }
@@ -662,17 +695,29 @@ function eventNewGame()
         local tbl = p.isShaman and player_state.shaman or player_state.non_shaman
         player_state.add(tbl, name)
     end
-
-    tfm.exec.setGameTime(180)
-    ReadXML()
-    ShowMapInfo()
-    if player_state.shaman._count == 2 then
-        tfm.exec.chatMessage(string.format("<ROSE>Ξ <CH>%s <ROSE>& <font color='#FEB1FC'>%s <ROSE>are now the shaman pair!", player_state.shaman[1], player_state.shaman[2]))
+    sWindow.close(WINDOW_LOBBY, nil)
+    if roundv.lobby then
+        sWindow.open(WINDOW_LOBBY, nil)
+        tfm.exec.setGameTime(20)
+        if player_state.shaman._count == 2 then
+            tfm.exec.chatMessage(string.format("<ROSE>Ξ <CH>%s <ROSE>& <font color='#FEB1FC'>%s <ROSE>are the next shaman pair!", player_state.shaman[1], player_state.shaman[2]))
+        else
+            tfm.exec.chatMessage("<R>Ξ No shaman pair!")
+        end
+        ui.setMapName("TSM LOBBY")
     else
-        tfm.exec.chatMessage("<R>Ξ No shaman pair!")
+        tfm.exec.setGameTime(180)
+        ReadXML()
+        ShowMapInfo()
+        if player_state.shaman._count == 2 then
+            tfm.exec.chatMessage(string.format("<ROSE>Ξ <CH>%s <ROSE>& <font color='#FEB1FC'>%s <ROSE>are now the shaman pair!", player_state.shaman[1], player_state.shaman[2]))
+        else
+            tfm.exec.chatMessage("<R>Ξ No shaman pair!")
+        end
+        UpdateTurnUI()
+        ui.setMapName("<VI>[TDM] <ROSE>Difficulty "..roundv.difficulty.." - <VP>@"..roundv.mapinfo.code)
+
     end
-    UpdateTurnUI()
-    ui.setMapName("<VI>[TDM] <ROSE>Difficulty "..roundv.difficulty.." - <VP>@"..roundv.mapinfo.code)
 end
 
 function eventNewPlayer(pn)
@@ -754,6 +799,7 @@ function eventSummoningEnd(pn, type, xPos, yPos, angle, desc)
             tfm.exec.removeObject(desc.id)
             tfm.exec.chatMessage("<J>Ξ It is not your turn to spawn yet ya dummy!", pn)
         else
+            if player_state.shaman._count ~= 2 then return end
             roundv.shaman_turn = rightful_turn == 1 and 2 or 1
             UpdateTurnUI()
         end
@@ -779,7 +825,7 @@ local init = function()
 	end
 	system.disableChatCommandDisplay(nil,true)
     for name in pairs(tfm.get.room.playerList) do eventNewPlayer(name) end
-	rotate_evt.rotate()
+	rotate_evt.lobby()
 end
 
 init()
