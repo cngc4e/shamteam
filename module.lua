@@ -162,7 +162,7 @@ do
         repeat
             diff = math.random(1, #mapdb['tdm'])  -- TODO: user-defined diff, and mode!
             map = mapdb['tdm'][diff][ math.random(1,#mapdb['tdm'][diff])]
-        until not roundv.running or tonumber(map) ~= roundv.mapinfo.code
+        until not roundv.previousmap or tonumber(map) ~= roundv.previousmap
         new_game_vars.difficulty = diff
 
         map_sched.load(map)
@@ -197,7 +197,8 @@ do
 
         -- pass statistics and info on the previous round
         new_game_vars.previous_round = {
-            shamans = {player_state.shaman[1], player_state.shaman[2]}
+            mapcode = roundv.mapinfo and roundv.mapinfo.code or nil,
+            shamans = {player_state.shaman[1], player_state.shaman[2]},
         }
         new_game_vars.lobby = true
         map_sched.load('#8')
@@ -704,7 +705,7 @@ end
 
 function eventLoop(elapsed, remaining)
     map_sched.run()
-    if not roundv then return end
+    if not roundv.running then return end
     if roundv.phase < 3 and remaining <= 0 then
         rotate_evt.timesup()
         roundv.phase = 3
@@ -744,14 +745,6 @@ function eventNewGame()
         lobby = new_game_vars.lobby,
     }
 
-    if new_game_vars.previous_round then
-        -- show back the GUI for the previous round of shamans
-        for i = 1, #new_game_vars.previous_round.shamans do
-            sWindow.open(WINDOW_GUI, new_game_vars.previous_round.shamans[i])
-        end
-    end
-    new_game_vars = {}
-
     player_state.dead = { _count = 0 }
     player_state.alive = table_copy(player_state.room)
     player_state.shaman = { _count = 0 }
@@ -765,6 +758,13 @@ function eventNewGame()
     end
 
     if roundv.lobby then
+        if new_game_vars.previous_round then
+            -- show back the GUI for the previous round of shamans
+            for i = 1, #new_game_vars.previous_round.shamans do
+                sWindow.open(WINDOW_GUI, new_game_vars.previous_round.shamans[i])
+            end
+            roundv.previousmap = new_game_vars.previous_round.mapcode
+        end
         sWindow.open(WINDOW_LOBBY, nil)
         tfm.exec.setGameTime(20)
         if player_state.shaman._count == 2 then
@@ -788,6 +788,7 @@ function eventNewGame()
         ui.setMapName("<VI>[TDM] <ROSE>Difficulty "..roundv.difficulty.." - <VP>@"..roundv.mapinfo.code)
         tfm.exec.disableMortCommand(false)
     end
+    new_game_vars = {}
 end
 
 function eventNewPlayer(pn)
