@@ -4,7 +4,7 @@ local staff = {["Cass11337#8417"]=true, ["Emeryaurora#0000"]=true, ["Pegasusflye
 local dev = {["Cass11337#8417"]=true, ["Casserole#1798"]=true}
 
 local players = {}  -- module specific player data
-local roundv  -- data spanning the lifetime of the round
+local roundv = {}  -- data spanning the lifetime of the round
 local new_game_vars = {}  -- data spanning the lifetime till the next eventNewGame
 
 -- TODO: temporary..
@@ -26,9 +26,16 @@ local GROUP_ADMIN = 3
 local GROUP_STAFF = 4
 local GROUP_DEV = 5
 
+-- Key trigger types
+local DOWN_ONLY = 1
+local UP_ONLY = 2
+local DOWN_ONLY = 3
+
 -- Windows
-local WINDOW_HELP = bit32.lshift(0, 8)
-local WINDOW_LOBBY = bit32.lshift(1, 8)
+local WINDOW_GUI = bit32.lshift(0, 8)
+local WINDOW_HELP = bit32.lshift(1, 8)
+local WINDOW_LOBBY = bit32.lshift(2, 8)
+local WINDOW_SETTINGS = bit32.lshift(3, 8)
 
 -- GUI color defs
 local GUI_BTN = "<font color='#EDCC8D'>"
@@ -43,39 +50,39 @@ local function math_round(num, dp)
 end
 
 local function string_split(str, delimiter)
-	local delimiter,a = delimiter or ',', {}
-	for part in str:gmatch('[^'..delimiter..']+') do
-		a[#a+1] = part
-	end
-	return a
+    local delimiter,a = delimiter or ',', {}
+    for part in str:gmatch('[^'..delimiter..']+') do
+        a[#a+1] = part
+    end
+    return a
 end
 
 local function table_copy(tbl)
-	local out = {}
-	for k, v in next, tbl do
-		out[k] = v
-	end
-	return out
+    local out = {}
+    for k, v in next, tbl do
+        out[k] = v
+    end
+    return out
 end
 
 local function ZeroTag(pn, add) --#0000 removed for tag matches
-	if add then
-		if not pn:find('#') then
-			return pn.."#0000"
-		else return pn
-		end
-	else
-		p = pn:find('#0000') and pn:sub(1,-6) or pn
-		return p
-	end
+    if add then
+        if not pn:find('#') then
+            return pn.."#0000"
+        else return pn
+        end
+    else
+        p = pn:find('#0000') and pn:sub(1,-6) or pn
+        return p
+    end
 end
 
 local function pFind(target, pn)
-	local ign = string.lower(target or ' ')
-	for name in pairs(tfm.get.room.playerList) do
-		if string.lower(name):find(ign) then return name end
-	end
-	if pn then tfm.exec.chatMessage("<R>error: no such target", pn) end
+    local ign = string.lower(target or ' ')
+    for name in pairs(tfm.get.room.playerList) do
+        if string.lower(name):find(ign) then return name end
+    end
+    if pn then tfm.exec.chatMessage("<R>error: no such target", pn) end
 end
 
 ----- LIBS / HELPERS
@@ -155,7 +162,7 @@ do
         repeat
             diff = math.random(1, #mapdb['tdm'])  -- TODO: user-defined diff, and mode!
             map = mapdb['tdm'][diff][ math.random(1,#mapdb['tdm'][diff])]
-        until not roundv or tonumber(map) ~= roundv.mapinfo.code
+        until not roundv.running or tonumber(map) ~= roundv.mapinfo.code
         new_game_vars.difficulty = diff
 
         map_sched.load(map)
@@ -188,6 +195,10 @@ do
             tfm.exec.setPlayerScore(second_highest, 100) -- TODO: prioritise the pre-defined pair or soulmate
         end
 
+        -- pass statistics and info on the previous round
+        new_game_vars.previous_round = {
+            shamans = {player_state.shaman[1], player_state.shaman[2]}
+        }
         new_game_vars.lobby = true
         map_sched.load('#8')
     end
@@ -215,6 +226,9 @@ do
     local function died(pn)
         if not roundv then
             return
+        elseif roundv.lobby then
+            tfm.exec.respawnPlayer(pn)
+            return
         end
         if player_state.shaman[pn] then
             tfm.exec.setGameTime(20)
@@ -224,6 +238,9 @@ do
 
     local function won(pn)
         if not roundv then
+            return
+        elseif roundv.lobby then
+            tfm.exec.respawnPlayer(pn)
             return
         end
         diedwon('won', pn)
@@ -254,9 +271,25 @@ do
     local help_ta_range = {
         ['Welcome'] = {WINDOW_HELP+21, WINDOW_HELP+22},
         ['Contributors'] = {WINDOW_HELP+51, WINDOW_HELP+52},
-    }  -- TODO: define somewhere more appropriate..
+    }
     -- WARNING: No error checking, ensure that all your windows have all the required attributes (open, close, type, players)
     local windows = {
+        [WINDOW_GUI] = {
+            open = function(pn, p_data, tab)
+                local T = {{"event:help!Welcome","?"},{"event:playersets","P"},{"event:roomsets","O"}}
+                local x, y = 800-(30*(#T+1)), 25
+                for i,m in ipairs(T) do
+                    ui.addTextArea(WINDOW_GUI+i,"<p align='center'><a href='"..m[1].."'>"..m[2], pn, x+(i*30), y, 20, 0, 1, 0, .7, true)
+                end
+            end,
+            close = function(pn, p_data)
+                for i = 1, 3 do
+                    ui.removeTextArea(WINDOW_GUI+i, pn)
+                end
+            end,
+            type = INDEPENDENT,
+            players = {}
+        },
         [WINDOW_HELP] = {
             open = function(pn, p_data, tab)
                 local tabs = {'Welcome','Rules','Commands','Contributors','Close'}
@@ -378,14 +411,28 @@ A full list of mapcrew staff are available via the !mapcrew command.
 end
 
 keys = {
-    [72] = function(pn) -- h (display help)
-        if sWindow.isOpened(WINDOW_HELP, pn) then
-            sWindow.close(WINDOW_HELP, pn)
-            players[pn].windows.help = false
-        else
-            sWindow.open(WINDOW_HELP, pn)
-        end
-    end,
+    [71] = {
+        func = function(pn, enable) -- g (display GUI for shamans)
+            if player_state.shaman[pn] then
+                if enable then
+                    sWindow.open(WINDOW_GUI, pn)
+                else
+                    sWindow.close(WINDOW_GUI, pn)
+                end
+            end
+        end,
+        trigger = DOWN_UP
+    },
+    [72] = {
+        func = function(pn) -- h (display help)
+            if sWindow.isOpened(WINDOW_HELP, pn) then
+                sWindow.close(WINDOW_HELP, pn)
+            else
+                sWindow.open(WINDOW_HELP, pn)
+            end
+        end,
+        trigger = DOWN_ONLY
+    },
 }
 
 cmds = {
@@ -572,6 +619,14 @@ cmds = {
         end,
         perms = GROUP_PLAYER
     },
+    m = {
+        func = function(pn)
+            if not roundv.lobby then
+                tfm.exec.killPlayer(pn)
+            end
+        end,
+        perms = GROUP_PLAYER
+    }
 }
 
 -- NOTE: It is possible for players to alter callback strings, ensure
@@ -630,22 +685,21 @@ end
 function eventChatCommand(pn, msg)
     local words = string_split(string.lower(msg), "%s")
     if cmds[words[1]] then
-        print(players[pn].group.." vs "..cmds[words[1]].perms)
-        if not cmds[words[1]].perms or (cmds[words[1]].perms and players[pn].group >= cmds[words[1]].perms) then
+        if not cmds[words[1]].perms or players[pn].group >= cmds[words[1]].perms then
             cmds[words[1]].func(pn, msg, table.unpack(words))
         else
             tfm.exec.chatMessage('<R>error: no authority', pn)
         end
     else
        tfm.exec.chatMessage('<R>error: invalid command', pn)
-	end
+    end
     
 end
 
 function eventKeyboard(pn, k, d, x, y)
-	if keys[k] then
-		keys[k](pn, d, x, y)
-	end
+    if keys[k] then
+        keys[k].func(pn, d, x, y)
+    end
 end
 
 function eventLoop(elapsed, remaining)
@@ -671,7 +725,7 @@ end
 
 function eventNewGame()
     if not tfm.get.room.xmlMapInfo then
-        roundv = nil
+        roundv = { running = false }
         return
     end
     roundv = {
@@ -686,9 +740,18 @@ function eventNewGame()
         shaman_turn = 1,
         difficulty = new_game_vars.difficulty or 0,
         phase = 0,
+        running = true,
         lobby = new_game_vars.lobby,
     }
+
+    if new_game_vars.previous_round then
+        -- show back the GUI for the previous round of shamans
+        for i = 1, #new_game_vars.previous_round.shamans do
+            sWindow.open(WINDOW_GUI, new_game_vars.previous_round.shamans[i])
+        end
+    end
     new_game_vars = {}
+
     player_state.dead = { _count = 0 }
     player_state.alive = table_copy(player_state.room)
     player_state.shaman = { _count = 0 }
@@ -696,8 +759,11 @@ function eventNewGame()
     for name, p in pairs(tfm.get.room.playerList) do
         local tbl = p.isShaman and player_state.shaman or player_state.non_shaman
         player_state.add(tbl, name)
+        if p.isShaman then  -- hide the GUI for shamans
+            sWindow.close(WINDOW_GUI, name)
+        end
     end
-    sWindow.close(WINDOW_LOBBY, nil)
+
     if roundv.lobby then
         sWindow.open(WINDOW_LOBBY, nil)
         tfm.exec.setGameTime(20)
@@ -707,7 +773,9 @@ function eventNewGame()
             tfm.exec.chatMessage("<R>Ξ No shaman pair!")
         end
         ui.setMapName("TSM LOBBY")
+        tfm.exec.disableMortCommand(true)
     else
+        sWindow.close(WINDOW_LOBBY, nil)
         tfm.exec.setGameTime(180)
         ReadXML()
         ShowMapInfo()
@@ -718,13 +786,13 @@ function eventNewGame()
         end
         UpdateTurnUI()
         ui.setMapName("<VI>[TDM] <ROSE>Difficulty "..roundv.difficulty.." - <VP>@"..roundv.mapinfo.code)
-
+        tfm.exec.disableMortCommand(false)
     end
 end
 
 function eventNewPlayer(pn)
-	local p = tfm.get.room.playerList[pn]
-	players[pn] = {
+    local p = tfm.get.room.playerList[pn]
+    players[pn] = {
         windows = {
             help = false,
         },
@@ -733,8 +801,8 @@ function eventNewPlayer(pn)
         group = GROUP_PLAYER,
         internal_score = 0,
     }
-	if translations[p.community] then
-		players[pn].lang = p.community
+    if translations[p.community] then
+        players[pn].lang = p.community
     end
 
     if dev[pn] then
@@ -746,8 +814,20 @@ function eventNewPlayer(pn)
     end
 
     system.bindMouse(pn, true)
-    for key in pairs(keys) do
-		system.bindKeyboard(pn, key, true)
+    for key, a in pairs(keys) do
+        if a.trigger == DOWN_ONLY then
+            system.bindKeyboard(pn, key, true)
+        elseif a.trigger == UP_ONLY then
+            system.bindKeyboard(pn, key, false)
+        elseif a.trigger == DOWN_UP then
+            system.bindKeyboard(pn, key, true)
+            system.bindKeyboard(pn, key, false)
+        end
+    end
+
+    local load_lobby = false
+    if player_state.room._count == 1 and false then  -- TODO: restart to the lobby, doesn't work well atm
+        load_lobby = true
     end
     player_state.add(player_state.room, pn)
     player_state.add(player_state.dead, pn)
@@ -756,6 +836,12 @@ function eventNewPlayer(pn)
 
     tfm.exec.setPlayerScore(pn, 0)
     tfm.exec.setShamanMode(pn, 2)  -- Force divine for TDM
+
+    sWindow.open(WINDOW_GUI, pn)
+
+    if load_lobby then 
+        rotate_evt.lobby()
+    end
 end
 
 function eventPlayerDied(pn)
@@ -809,25 +895,25 @@ function eventSummoningEnd(pn, type, xPos, yPos, angle, desc)
 end
 
 function eventTextAreaCallback(id, pn, cb)
-	local params
-	if cb:find('!') then 
+    local params = {}
+    if cb:find('!') then 
         params = string_split(cb:match('!(.*)'), '&')
         cb = cb:match('(%w+)!')
-	end
-	-- It is possible for players to alter callback strings
-	local success, result = pcall(callbacks[cb], pn, table.unpack(params))
-	if not success then
-		print(string.format("Exception encountered in eventTextAreaCallback (%s): %s", pn, result))
-	end
+    end
+    -- It is possible for players to alter callback strings
+    local success, result = pcall(callbacks[cb], pn, table.unpack(params))
+    if not success then
+        print(string.format("Exception encountered in eventTextAreaCallback (%s): %s", pn, result))
+    end
 end
 
 local init = function()
-	for _,v in ipairs({'AfkDeath','AllShamanSkills','AutoNewGame','AutoScore','AutoTimeLeft','PhysicalConsumables'}) do
-		tfm.exec['disable'..v](true)
-	end
-	system.disableChatCommandDisplay(nil,true)
+    for _,v in ipairs({'AfkDeath','AllShamanSkills','AutoNewGame','AutoScore','AutoTimeLeft','PhysicalConsumables'}) do
+        tfm.exec['disable'..v](true)
+    end
+    system.disableChatCommandDisplay(nil,true)
     for name in pairs(tfm.get.room.playerList) do eventNewPlayer(name) end
-	rotate_evt.lobby()
+    rotate_evt.lobby()
 end
 
 init()
