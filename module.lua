@@ -929,23 +929,26 @@ function eventSummoningStart(pn, type, xPos, yPos, angle)
             --tfm.exec.chatMessage("<J>Ξ It is not your turn to spawn yet! Take a chill pill!", pn)
         end
     end
+    roundv.startsummon = true  -- workaround b/2
 end
 
 function eventSummoningEnd(pn, type, xPos, yPos, angle, desc)
     -- AntiLag™ by Leafileaf
     -- TODO: !antilag + dynamic detection
-    if false and desc.baseType ~= 17 and desc.baseType ~= 32 then
-        tfm.exec.moveObject(desc.id, xPos, yPos, false, 0, 0, false, angle, false)
-    end
-    if desc.baseType ~= 0 then
-        local rightful_turn = roundv.shaman_turn
-        if pn ~= roundv.shamans[rightful_turn] then
-            tfm.exec.removeObject(desc.id)
-            tfm.exec.chatMessage("<J>Ξ It is not your turn to spawn yet ya dummy!", pn)
-        else
-            if #roundv.shamans ~= 2 then return end
-            roundv.shaman_turn = rightful_turn == 1 and 2 or 1
-            UpdateTurnUI()
+    if roundv.startsummon then  -- workaround b/2: map prespawned object triggers summoning end event
+        if false and desc.baseType ~= 17 and desc.baseType ~= 32 then
+            tfm.exec.moveObject(desc.id, xPos, yPos, false, 0, 0, false, angle, false)
+        end
+        if desc.baseType ~= 0 then
+            local rightful_turn = roundv.shaman_turn
+            if pn ~= roundv.shamans[rightful_turn] then
+                tfm.exec.removeObject(desc.id)
+                tfm.exec.chatMessage("<J>Ξ It is not your turn to spawn yet ya dummy!", pn)
+            else
+                if #roundv.shamans ~= 2 then return end
+                roundv.shaman_turn = rightful_turn == 1 and 2 or 1
+                UpdateTurnUI()
+            end
         end
     end
 end
