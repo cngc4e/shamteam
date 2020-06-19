@@ -434,7 +434,7 @@ cmds = {
         func = function(pn, m)
             local msg = m:match("^%a+%s+(.*)")
             if msg then
-                tfm.exec.chatMessage(string.format("<VP>[Shamteam Moderation] %s", msg))
+                tfm.exec.chatMessage(string.format("<ROSE><b>[#ShamTeam Mod]</b> %s", msg))
             else MSG('empty message', pn, 'R')
             end
         end,
@@ -633,8 +633,10 @@ cmds = {
                 other = true
             end
             if target then
-                if w1 == "unafk" and other and pL.spectator[target] then
-                    setSpectate(target, false)
+                if w1 == "unafk" then
+                    if other and pL.spectator[target] then
+                        setSpectate(target, false)
+                    end
                 elseif not pL.spectator[target] and not pL.shaman[target] then
                     setSpectate(target, true)
                     if other then
@@ -665,7 +667,6 @@ callbacks = {
     end,
     unafk = function(pn)
         setSpectate(pn, false)
-        ui.removeTextArea(TA_SPECTATING, pn)
         tfm.exec.chatMessage("<ROSE>Welcome back! We've been expecting you.", pn)
     end,
 }
@@ -681,6 +682,7 @@ setSpectate = function(pn, b)
         pL.spectator[pn] = nil
         players[pn].internal_score = 0
         tfm.exec.setPlayerScore(pn, 0)
+        ui.removeTextArea(TA_SPECTATING, pn)
     end
 end
 
