@@ -7,6 +7,17 @@ local players = {}  -- module specific player data
 local roundv = {}  -- data spanning the lifetime of the round
 local new_game_vars = {}  -- data spanning the lifetime till the next eventNewGame
 
+-- Keeps an accurate list of players and their states by rely on asynchronous events to update
+-- This works around playerList issues which are caused by it relying on sync and can be slow to update
+local pL = {
+    room = {},
+    alive = {},
+    dead = {},
+    shaman = {},
+    non_shaman = {},
+    spectator = {},
+}
+
 -- TODO: temporary..
 local mapdb = {
     tdm = {
@@ -72,8 +83,7 @@ local function ZeroTag(pn, add) --#0000 removed for tag matches
         else return pn
         end
     else
-        p = pn:find('#0000') and pn:sub(1,-6) or pn
-        return p
+        return pn:find('#0000') and pn:sub(1,-6) or pn
     end
 end
 
@@ -83,6 +93,11 @@ local function pFind(target, pn)
         if string.lower(name):find(ign) then return name end
     end
     if pn then tfm.exec.chatMessage("<R>error: no such target", pn) end
+end
+
+local function pDisp(pn)
+    -- TODO: check if the player has the same name as another existing player in the room.
+    return pn:find('#') and pn:sub(1,-6) or pn
 end
 
 ----- LIBS / HELPERS
@@ -116,44 +131,6 @@ do
     map_sched.run = run
 end
 
--- Adapted from Player Flow (performatic).lua, original author: Bolodefchoco
-local player_state
-do
-    local room  = { _count = 0 }
-    local alive = { _count = 0 }
-    local dead  = { _count = 0 }
-    local shaman = { _count = 0 }
-    local non_shaman = { _count = 0 }
-    local spectator = { _count = 0 }  -- TODO
-
-    local players_insert = function(where, playerName)
-        if not where[playerName] then
-            where._count = where._count + 1
-            where[where._count] = playerName
-            where[playerName] = where._count
-        end
-    end
-
-    local players_remove = function(where, playerName)
-        if where[playerName] then
-            where._count = where._count - 1
-            where[where[playerName]] = nil
-            where[playerName] = nil
-        end
-    end
-
-    player_state = {
-        room = room,
-        alive = alive,
-        dead = dead,
-        shaman = shaman,
-        non_shaman = non_shaman,
-        spectator = spectator,
-        add = players_insert,
-        remove = players_remove
-    }
-end
-
 -- Handles map rotation and scoring
 local rotate_evt
 do
@@ -169,23 +146,21 @@ do
     end
 
     local function lobby()
-        for _,name in ipairs(player_state.shaman) do
+        for name in pairs(pL.shaman) do
             players[name].internal_score = 0
             tfm.exec.setPlayerScore(name, 0)
         end
 
         local highest = {-1}
         local second_highest = nil
-        for _,name in ipairs(player_state.room) do
-            if not player_state.shaman[name] then
-                players[name].internal_score = players[name].internal_score + 1
-                if players[name].internal_score >= highest[1] then
-                    second_highest = highest[2]
-                    highest[1] = players[name].internal_score
-                    highest[2] = name
-                end
+        for name in ipairs(pL.room) do
+            players[name].internal_score = players[name].internal_score + 1
+            if players[name].internal_score >= highest[1] then
+                second_highest = highest[2]
+                highest[1] = players[name].internal_score
+                highest[2] = name
             end
-            --tfm.exec.chatMessage("[dbg] int score "..name..": "..players[name].internal_score)
+            tfm.exec.chatMessage("[dbg] int score "..name..": "..players[name].internal_score)
         end
 
         tfm.exec.setPlayerScore(highest[2], 100)
@@ -198,7 +173,7 @@ do
         -- pass statistics and info on the previous round
         new_game_vars.previous_round = {
             mapcode = roundv.mapinfo and roundv.mapinfo.code or nil,
-            shamans = {player_state.shaman[1], player_state.shaman[2]},
+            shamans = {pL.shaman[1], pL.shaman[2]},
         }
         new_game_vars.lobby = true
         map_sched.load('#8')
@@ -207,9 +182,9 @@ do
     local function diedwon(type, pn)
         local allplayerdead = true
         local allnonshamdead = true
-        for _, name in pairs(player_state.room) do
-            if not player_state.dead[name] then allplayerdead = false end
-            if not player_state.dead[name] and player_state.non_shaman[name] then allnonshamdead = false end
+        for name in pairs(pL.room) do
+            if not pL.dead[name] then allplayerdead = false end
+            if not pL.dead[name] and pL.non_shaman[name] then allnonshamdead = false end
         end
         if allplayerdead then
             lobby()
@@ -231,7 +206,7 @@ do
             tfm.exec.respawnPlayer(pn)
             return
         end
-        if player_state.shaman[pn] then
+        if pL.shaman[pn] then
             tfm.exec.setGameTime(20)
         end
         diedwon('died', pn)
@@ -299,7 +274,7 @@ do
 
                 if not tabs_k[tab] then return end
                 if not p_data.tab then
-                    ui.addTextArea(WINDOW_HELP+1,"",pn,75,40,650,340,0x4c1130,0x4c1130,1,true)  -- the background
+                    ui.addTextArea(WINDOW_HELP+1,"",pn,75,40,650,340,0x0d1137,0x0d1137,1,true)  -- the background
                 else  -- already opened before
                     if help_ta_range[p_data.tab] then
                         for i = help_ta_range[p_data.tab][1], help_ta_range[p_data.tab][1] do
@@ -315,13 +290,13 @@ do
 
                 if tab == "Welcome" then
                     local text = [[
-<p align="center"><font size='13'><ROSE>Welcome to #shamteam</font></p>
+<p align="center"><J><font size='14'><b>Welcome to #ShamTeam</font></b></p>
 <p align="left"><font size='12'><N>The gameplay is simple: You will pair with another shaman and take turns spawning objects. You earn points at the end of the round depending on mice saved. But be careful! If you make a mistake by spawning when it's not your turn, or dying, you and your partner will lose points! There will be mods that you can enable to make your gameplay a little bit more challenging, and should you win the round, your score will be multiplied accordingly. 
                     ]]
                     ui.addTextArea(WINDOW_HELP+21,text,pn,88,95,625,nil,0,0,0,true)
                 elseif tab == "Contributors" then
                     local text = [[
-<p align="center"><font size='13'><ROSE>Contributors</font></p>
+<p align="center"><J><font size='14'><b>Contributors</b></font></p>
 <p align="left"><font size='12'><N>#shamteam is brought to you by the Academy of Building! It would not be possible without these people:
 
 <J>Casserole#1798<N> - Developer
@@ -414,7 +389,7 @@ end
 keys = {
     [71] = {
         func = function(pn, enable) -- g (display GUI for shamans)
-            if player_state.shaman[pn] then
+            if pL.shaman[pn] then
                 if enable then
                     sWindow.open(WINDOW_GUI, pn)
                 else
@@ -495,7 +470,7 @@ cmds = {
     },
     skip = {
         func = function(pn)
-            if player_state.shaman[pn] or players[pn].group >= GROUP_STAFF then  -- TODO: both shams must vote!
+            if pL.shaman[pn] or players[pn].group >= GROUP_STAFF then  -- TODO: both shams must vote!
                 rotate_evt.timesup()
             end
         end,
@@ -678,8 +653,8 @@ end
 
 local UpdateTurnUI = function()
     local color = "CH"
-    local shaman = player_state.shaman[roundv.shaman_turn]
-    ui.setShamanName(string.format("<%s>%s's <J>Turn", color, shaman))
+    local shaman = roundv.shamans[roundv.shaman_turn]
+    ui.setShamanName(string.format("<%s>%s's <J>Turn", color, pDisp(shaman)))
 end
 
 ----- EVENTS
@@ -738,6 +713,7 @@ function eventNewGame()
             author = tfm.get.room.xmlMapInfo.author,
             code = tonumber(tfm.get.room.currentMap:match('%d+'))
         },
+        shamans = {},
         shaman_turn = 1,
         difficulty = new_game_vars.difficulty or 0,
         phase = 0,
@@ -745,17 +721,20 @@ function eventNewGame()
         lobby = new_game_vars.lobby,
     }
 
-    player_state.dead = { _count = 0 }
-    player_state.alive = table_copy(player_state.room)
-    player_state.shaman = { _count = 0 }
-    player_state.non_shaman = { _count = 0 }
+    pL.dead = {}
+    pL.alive = table_copy(pL.room)
+    pL.shaman = {}
+    pL.non_shaman = {}
+
     for name, p in pairs(tfm.get.room.playerList) do
-        local tbl = p.isShaman and player_state.shaman or player_state.non_shaman
-        player_state.add(tbl, name)
-        if p.isShaman then  -- hide the GUI for shamans
-            sWindow.close(WINDOW_GUI, name)
+        if p.isShaman then
+            roundv.shamans[#roundv.shamans+1] = name
+            pL.shaman[name] = true
+        else
+            pL.non_shaman[name] = true
         end
     end
+    assert(#roundv.shamans <= 2, "Shaman count is greater than 2: "..#roundv.shamans)
 
     if roundv.lobby then
         if new_game_vars.previous_round then
@@ -767,20 +746,25 @@ function eventNewGame()
         end
         sWindow.open(WINDOW_LOBBY, nil)
         tfm.exec.setGameTime(20)
-        if player_state.shaman._count == 2 then
-            tfm.exec.chatMessage(string.format("<ROSE>Ξ <CH>%s <ROSE>& <font color='#FEB1FC'>%s <ROSE>are the next shaman pair!", player_state.shaman[1], player_state.shaman[2]))
+        if #roundv.shamans == 2 then
+            tfm.exec.chatMessage(string.format("<ROSE>Ξ <CH>%s <ROSE>& <font color='#FEB1FC'>%s <ROSE>are the next shaman pair!", pDisp(roundv.shamans[1]), pDisp(roundv.shamans[2])))
         else
             tfm.exec.chatMessage("<R>Ξ No shaman pair!")
         end
         ui.setMapName("TSM LOBBY")
         tfm.exec.disableMortCommand(true)
     else
+        -- hide the GUI for shamans
+        for i = 1, #roundv.shamans do
+            local name = roundv.shamans[i]
+            sWindow.close(WINDOW_GUI, name)
+        end
         sWindow.close(WINDOW_LOBBY, nil)
         tfm.exec.setGameTime(180)
         ReadXML()
         ShowMapInfo()
-        if player_state.shaman._count == 2 then
-            tfm.exec.chatMessage(string.format("<ROSE>Ξ <CH>%s <ROSE>& <font color='#FEB1FC'>%s <ROSE>are now the shaman pair!", player_state.shaman[1], player_state.shaman[2]))
+        if #roundv.shamans == 2 then
+            tfm.exec.chatMessage(string.format("<ROSE>Ξ <CH>%s <ROSE>& <font color='#FEB1FC'>%s <ROSE>are now the shaman pair!", pDisp(roundv.shamans[1]), pDisp(roundv.shamans[2])))
         else
             tfm.exec.chatMessage("<R>Ξ No shaman pair!")
         end
@@ -827,11 +811,11 @@ function eventNewPlayer(pn)
     end
 
     local load_lobby = false
-    if player_state.room._count == 1 and false then  -- TODO: restart to the lobby, doesn't work well atm
+    if #pL.room == 1 and false then  -- TODO: restart to the lobby, doesn't work well atm
         load_lobby = true
     end
-    player_state.add(player_state.room, pn)
-    player_state.add(player_state.dead, pn)
+    pL.room[pn] = true
+    pL.dead[pn] = true
 
     tfm.exec.chatMessage("\t<VP>Ξ Welcome to <b>Team Shaman (TSM)</b> v1.0! Ξ\n<J>Also known as Team Hard Mode, TSM is a building module where dual shamans take turns to spawn objects.\nPress H for more information.\n<R>NOTE: <VP>For development purposes this module will only run Team Divine Mode tentatively. As the module starts picking up shape, we'll gradually implement Team Hard Mode.", pn)
 
@@ -846,31 +830,31 @@ function eventNewPlayer(pn)
 end
 
 function eventPlayerDied(pn)
-    player_state.remove(player_state.alive, pn)
-    player_state.add(player_state.dead, pn)
+    pL.alive[pn] = nil
+    pL.dead[pn] = true
     rotate_evt.died(pn)
 end
 
 function eventPlayerWon(pn, elapsed)
-    player_state.remove(player_state.alive, pn)
-    player_state.add(player_state.dead, pn)
+    pL.alive[pn] = nil
+    pL.dead[pn] = true
     rotate_evt.won(pn)
 end
 
 function eventPlayerLeft(pn)
-    player_state.remove(player_state.room, pn)
+    pL.room[pn] = nil
     sWindow.clearPlayer(pn)
 end
 
 function eventPlayerRespawn(pn)
-    player_state.remove(player_state.dead, pn)
-    player_state.add(player_state.alive, pn)
+    pL.dead[pn] = nil
+    pL.alive[pn] = true
 end
 
 function eventSummoningStart(pn, type, xPos, yPos, angle)
     if type ~= 0 then
         local rightful_turn = roundv.shaman_turn
-        if pn ~= player_state.shaman[rightful_turn] then
+        if pn ~= roundv.shamans[rightful_turn] then
             --tfm.exec.chatMessage("<J>Ξ It is not your turn to spawn yet! Take a chill pill!", pn)
         end
     end
@@ -884,11 +868,11 @@ function eventSummoningEnd(pn, type, xPos, yPos, angle, desc)
     end
     if desc.baseType ~= 0 then
         local rightful_turn = roundv.shaman_turn
-        if pn ~= player_state.shaman[rightful_turn] then
+        if pn ~= roundv.shamans[rightful_turn] then
             tfm.exec.removeObject(desc.id)
             tfm.exec.chatMessage("<J>Ξ It is not your turn to spawn yet ya dummy!", pn)
         else
-            if player_state.shaman._count ~= 2 then return end
+            if #roundv.shamans ~= 2 then return end
             roundv.shaman_turn = rightful_turn == 1 and 2 or 1
             UpdateTurnUI()
         end
