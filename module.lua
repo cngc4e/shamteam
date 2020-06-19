@@ -153,7 +153,7 @@ do
 
         local highest = {-1}
         local second_highest = nil
-        for name in ipairs(pL.room) do
+        for name in pairs(pL.room) do
             players[name].internal_score = players[name].internal_score + 1
             if players[name].internal_score >= highest[1] then
                 second_highest = highest[2]
@@ -416,7 +416,7 @@ cmds = {
         func = function(pn, m)
             local msg = m:match("^%a+%s+(.*)")
             if msg then
-                tfm.exec.chatMessage(string.format("<ROSE>[Shamteam Moderation] %s", msg))
+                tfm.exec.chatMessage(string.format("<VP>[Shamteam Moderation] %s", msg))
             else MSG('empty message', pn, 'R')
             end
         end,
