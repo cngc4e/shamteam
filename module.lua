@@ -284,9 +284,15 @@ do
                     ui.addTextArea(WINDOW_HELP+1,"",pn,75,40,650,340,0x4c1130,0x4c1130,1,true)  -- the background
                 else  -- already opened before
                     if help_ta_range[p_data.tab] then
-                        for i = help_ta_range[p_data.tab][1], help_ta_range[p_data.tab][1] do
+                        for i = help_ta_range[p_data.tab][1], help_ta_range[p_data.tab][2] do
                             ui.removeTextArea(i, pn)
                         end
+                    end
+                    if p_data.images[p_data.tab] then
+                        for i = 1, #p_data.images[p_data.tab] do
+                            tfm.exec.removeImage(p_data.images[p_data.tab][i])
+                        end
+                        p_data.images[p_data.tab] = nil
                     end
                 end
                 for i, v in pairs(tabs) do
@@ -322,11 +328,11 @@ do
 <J>Pegasusflyer#0000<N> - Module inspiration, module designer & mapcrew
 <J>Tactcat#0000<N> - Module inspiration
 
-Translators:
-<J>Pinoyboy#9999<N> (PH)
 A full list of staff are available via the !staff command. 
                     ]]
                     ui.addTextArea(WINDOW_HELP+51,text,pn,88,95,625,nil,0,0,0,true)
+                    local img_id = tfm.exec.addImage("172cde7e326.png", "&"..WINDOW_HELP+51, 571, 180, pn)
+                    p_data.images[tab] = {img_id}
                 end
 
             end,
@@ -338,6 +344,12 @@ A full list of staff are available via the !staff command.
                     for i = help_ta_range[p_data.tab][1], help_ta_range[p_data.tab][2] do
                         ui.removeTextArea(i, pn)
                     end
+                end
+                if p_data.images[p_data.tab] then
+                    for i = 1, #p_data.images[p_data.tab] do
+                        tfm.exec.removeImage(p_data.images[p_data.tab][i])
+                    end
+                    p_data.images[p_data.tab] = nil
                 end
                 p_data.tab = nil
             end,
@@ -366,7 +378,7 @@ A full list of staff are available via the !staff command.
             end
             return
         elseif not windows[window_id].players[pn] then
-            windows[window_id].players[pn] = {images={}, data={}}
+            windows[window_id].players[pn] = {images={}}
         end
         if windows[window_id].type == MUTUALLY_EXCLUSIVE then
             for w_id, w in pairs(windows) do
@@ -376,7 +388,7 @@ A full list of staff are available via the !staff command.
             end
         end
         windows[window_id].players[pn].is_open = true
-        windows[window_id].open(pn, windows[window_id].players[pn].data, table.unpack(arg))
+        windows[window_id].open(pn, windows[window_id].players[pn], table.unpack(arg))
     end
 
     sWindow.close = function(window_id, pn)
@@ -386,7 +398,7 @@ A full list of staff are available via the !staff command.
             end
         elseif sWindow.isOpened(window_id, pn) then
             windows[window_id].players[pn].is_open = false
-            windows[window_id].close(pn, windows[window_id].players[pn].data)
+            windows[window_id].close(pn, windows[window_id].players[pn])
         end
     end
 
@@ -466,15 +478,15 @@ cmds = {
                         end
                         args[#args+1] = params
                     elseif arg:find('^"(.*)"$') then
-                        args[#args+1] = arg:match('^"(.*)"$'):gsub('&lt;', '<'):gsub('&gt;', '>')
+                        args[#args+1] = arg:match('^"(.*)"$'):gsub('&lt;', '<'):gsub('&gt;', '>'):gsub('&amp;', '&')
                     elseif arg:find('^"(.*)') then
                         buildstring[1] = true
-                        buildstring[2] = arg:match('^"(.*)'):gsub('&lt;', '<'):gsub('&gt;', '>')
+                        buildstring[2] = arg:match('^"(.*)'):gsub('&lt;', '<'):gsub('&gt;', '>'):gsub('&amp;', '&')
                     elseif arg:find('(.*)"$') then
                         buildstring[1] = false
-                        args[#args+1] = buildstring[2] .. " " .. arg:match('(.*)"$'):gsub('&lt;', '<'):gsub('&gt;', '>')
+                        args[#args+1] = buildstring[2] .. " " .. arg:match('(.*)"$'):gsub('&lt;', '<'):gsub('&gt;', '>'):gsub('&amp;', '&')
                     elseif buildstring[1] then
-                        buildstring[2] = buildstring[2] .. " " .. arg:gsub('&lt;', '<'):gsub('&gt;', '>')
+                        buildstring[2] = buildstring[2] .. " " .. arg:gsub('&lt;', '<'):gsub('&gt;', '>'):gsub('&amp;', '&')
                     else
                         args[#args+1] = arg
                     end
@@ -916,6 +928,10 @@ end
 function eventPlayerLeft(pn)
     pL.room[pn] = nil
     pL.spectator[pn] = nil
+    if players[pn].pair then
+        local target = players[pn].pair
+        players[target].pair = nil
+    end
     sWindow.clearPlayer(pn)
 end
 
