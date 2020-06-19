@@ -1,6 +1,6 @@
 
 local translations = {}
-local staff = {["Cass11337#8417"]=true, ["Emeryaurora#0000"]=true, ["Pegasusflyer#0000"]=true, ["Tactcat#0000"]=true}
+local staff = {["Cass11337#8417"]=true, ["Emeryaurora#0000"]=true, ["Pegasusflyer#0000"]=true, ["Tactcat#0000"]=true, ["Leafileaf#0000"]=true, ["Rini#5475"]=true, ["Rayallan#0000"]=true}
 local dev = {["Cass11337#8417"]=true, ["Casserole#1798"]=true}
 
 local players = {}  -- module specific player data
@@ -43,16 +43,19 @@ local UP_ONLY = 2
 local DOWN_ONLY = 3
 
 -- Windows
-local WINDOW_GUI = bit32.lshift(0, 8)
-local WINDOW_HELP = bit32.lshift(1, 8)
-local WINDOW_LOBBY = bit32.lshift(2, 8)
-local WINDOW_SETTINGS = bit32.lshift(3, 8)
+local WINDOW_GUI = bit32.lshift(0, 7)
+local WINDOW_HELP = bit32.lshift(1, 7)
+local WINDOW_LOBBY = bit32.lshift(2, 7)
+local WINDOW_SETTINGS = bit32.lshift(3, 7)
+
+-- TextAreas
+local TA_SPECTATING = 9000
 
 -- GUI color defs
 local GUI_BTN = "<font color='#EDCC8D'>"
 
 ----- Forward declarations (local)
-local keys, cmds, callbacks, sWindow
+local keys, cmds, cmds_alias, callbacks, sWindow, setSpectate
 
 ----- GENERAL UTILS
 local function math_round(num, dp)
@@ -154,11 +157,13 @@ do
         local highest = {-1}
         local second_highest = nil
         for name in pairs(pL.room) do
-            players[name].internal_score = players[name].internal_score + 1
-            if players[name].internal_score >= highest[1] then
-                second_highest = highest[2]
-                highest[1] = players[name].internal_score
-                highest[2] = name
+            if not pL.spectator[name] then
+                players[name].internal_score = players[name].internal_score + 1
+                if players[name].internal_score >= highest[1] then
+                    second_highest = highest[2]
+                    highest[1] = players[name].internal_score
+                    highest[2] = name
+                end
             end
             tfm.exec.chatMessage("[dbg] int score "..name..": "..players[name].internal_score)
         end
@@ -176,7 +181,7 @@ do
             shamans = {pL.shaman[1], pL.shaman[2]},
         }
         new_game_vars.lobby = true
-        map_sched.load('#8')
+        map_sched.load(7740307)
     end
     
     local function diedwon(type, pn)
@@ -190,7 +195,7 @@ do
             lobby()
         elseif allnonshamdead then
             if type=='won' then tfm.exec.setGameTime(20) end
-            if roundv.mapinfo.Opportunist then  -- TODO: nil
+            if roundv.mapinfo.Opportunist then
                 for _,name in pairs(roundv.shaman) do
                     tfm.exec.giveCheese(name)
                     tfm.exec.playerVictory(name)
@@ -200,7 +205,7 @@ do
     end
 
     local function died(pn)
-        if not roundv then
+        if not roundv.running or pL.spectator[pn] then
             return
         elseif roundv.lobby then
             tfm.exec.respawnPlayer(pn)
@@ -213,7 +218,7 @@ do
     end
 
     local function won(pn)
-        if not roundv then
+        if not roundv.running or pL.spectator[pn] then
             return
         elseif roundv.lobby then
             tfm.exec.respawnPlayer(pn)
@@ -223,6 +228,7 @@ do
     end
 
     local function timesup()
+        if not roundv.running then return end
         if roundv.lobby then
             rotate()
         else
@@ -246,6 +252,7 @@ do
 
     local help_ta_range = {
         ['Welcome'] = {WINDOW_HELP+21, WINDOW_HELP+22},
+        ['Commands'] = {WINDOW_HELP+41, WINDOW_HELP+42},
         ['Contributors'] = {WINDOW_HELP+51, WINDOW_HELP+52},
     }
     -- WARNING: No error checking, ensure that all your windows have all the required attributes (open, close, type, players)
@@ -274,7 +281,7 @@ do
 
                 if not tabs_k[tab] then return end
                 if not p_data.tab then
-                    ui.addTextArea(WINDOW_HELP+1,"",pn,75,40,650,340,0x0d1137,0x0d1137,1,true)  -- the background
+                    ui.addTextArea(WINDOW_HELP+1,"",pn,75,40,650,340,0x4c1130,0x4c1130,1,true)  -- the background
                 else  -- already opened before
                     if help_ta_range[p_data.tab] then
                         for i = help_ta_range[p_data.tab][1], help_ta_range[p_data.tab][1] do
@@ -284,16 +291,27 @@ do
                 end
                 for i, v in pairs(tabs) do
                     local opacity = (v == tab) and 0 or 1 
-                    ui.addTextArea(WINDOW_HELP+1+i, GUI_BTN.."<font size='2'><br><font size='12'><p align='center'><a href='event:help!"..v.."'>"..v.."</a>",pn,88+((i-1)*130),50,100,24,0x666666,0x676767,opacity,true)
+                    ui.addTextArea(WINDOW_HELP+1+i, GUI_BTN.."<font size='2'><br><font size='12'><p align='center'><a href='event:help!"..v.."'>"..v.."</a>",pn,92+((i-1)*130),50,100,24,0x666666,0x676767,opacity,true)
                 end
                 p_data.tab = tab
 
                 if tab == "Welcome" then
                     local text = [[
-<p align="center"><J><font size='14'><b>Welcome to #ShamTeam</font></b></p>
+<p align="center"><J><font size='14'><b>Welcome to #ShamTeam</b></font></p>
 <p align="left"><font size='12'><N>The gameplay is simple: You will pair with another shaman and take turns spawning objects. You earn points at the end of the round depending on mice saved. But be careful! If you make a mistake by spawning when it's not your turn, or dying, you and your partner will lose points! There will be mods that you can enable to make your gameplay a little bit more challenging, and should you win the round, your score will be multiplied accordingly. 
                     ]]
                     ui.addTextArea(WINDOW_HELP+21,text,pn,88,95,625,nil,0,0,0,true)
+                elseif tab == "Commands" then
+                    local text = [[
+<p align="center"><J><font size='14'><b>Commands</b></font></p>
+<p align="left"><font size='12'><N>!m/!mort - kills yourself
+!afk - mark yourself as a spectator
+!pair [player] - request to pair up with a player
+!cancel - cancels existing forced pairing or pairing request
+
+!stats [player] - view your stats or another player’s
+                    ]]
+                    ui.addTextArea(WINDOW_HELP+41,text,pn,88,95,625,nil,0,0,0,true)
                 elseif tab == "Contributors" then
                     local text = [[
 <p align="center"><J><font size='14'><b>Contributors</b></font></p>
@@ -306,7 +324,7 @@ do
 
 Translators:
 <J>Pinoyboy#9999<N> (PH)
-A full list of mapcrew staff are available via the !mapcrew command. 
+A full list of staff are available via the !staff command. 
                     ]]
                     ui.addTextArea(WINDOW_HELP+51,text,pn,88,95,625,nil,0,0,0,true)
                 end
@@ -476,22 +494,6 @@ cmds = {
         end,
         perms = GROUP_PLAYER
     },
-    afk = {
-        func = function(pn, m, w1, w2)
-            if true then -- TODO
-                return
-            end
-            local target
-            if w2 and admins[pn] then target = pFind(w2,pn) else target = pn end
-            if target and not afk[target] and not tfm.get.room.playerList[target].isShaman then
-                afk[target] = true
-                tfm.exec.killPlayer(target)
-                tfm.exec.setPlayerScore(target, -5)
-                tfm.exec.chatMessage(target.." has been marked afk!")
-            end
-        end,
-        perms = GROUP_PLAYER
-    },
     np = {
         func = function(pn, m, w1, w2)
             map_sched.load(w2)
@@ -595,14 +597,60 @@ cmds = {
         end,
         perms = GROUP_PLAYER
     },
-    m = {
+    mort = {
         func = function(pn)
             if not roundv.lobby then
                 tfm.exec.killPlayer(pn)
             end
         end,
         perms = GROUP_PLAYER
+    },
+    staff = {
+        func = function(pn)
+            tfm.exec.chatMessage(
+[[<J>List of mapcrew staff:<N>
+- Casserole#1798
+- Emeryaurora#0000
+- Pegasusflyer#0000
+- Rini#5475
+- Rayallan#0000
+
+<J>Module developers:<N>
+- Casserole#1798
+- Emeryaurora#0000]], pn)
+        end
+    },
+    help = {
+        func = function(pn)
+            sWindow.open(WINDOW_HELP, pn)
+        end
+    },
+    spectate = {
+        func = function(pn, m, w1, w2)
+            local target, other = pn
+            if w2 and players[pn].group >= GROUP_STAFF then  -- target others
+                target = pFind(w2, pn)
+                other = true
+            end
+            if target then
+                if w1 == "unafk" and other and pL.spectator[target] then
+                    setSpectate(target, false)
+                elseif not pL.spectator[target] and not pL.shaman[target] then
+                    setSpectate(target, true)
+                    if other then
+                        tfm.exec.chatMessage(string.format("<J>Ξ %s has been marked afk!", target))
+                    end
+                end
+            end
+        end,
+        perms = GROUP_PLAYER
     }
+}
+
+cmds_alias = {
+    m = "mort",
+    afk = "spectate",
+    unafk = "spectate",
 }
 
 -- NOTE: It is possible for players to alter callback strings, ensure
@@ -615,7 +663,26 @@ callbacks = {
             sWindow.open(WINDOW_HELP, pn, tab)
         end
     end,
+    unafk = function(pn)
+        setSpectate(pn, false)
+        ui.removeTextArea(TA_SPECTATING, pn)
+        tfm.exec.chatMessage("<ROSE>Welcome back! We've been expecting you.", pn)
+    end,
 }
+
+setSpectate = function(pn, b)
+    if b then
+        pL.spectator[pn] = true
+        players[pn].internal_score = -1
+        tfm.exec.setPlayerScore(pn, -5)
+        tfm.exec.killPlayer(pn)
+        ui.addTextArea(TA_SPECTATING, GUI_BTN.."<font size='14'><p align='center'><a href='event:unafk'>You have entered spectator mode.\nClick here to exit spectator mode.", pn, 190, 355, 420, nil, 1, 0, .7, true)
+    else
+        pL.spectator[pn] = nil
+        players[pn].internal_score = 0
+        tfm.exec.setPlayerScore(pn, 0)
+    end
+end
 
 local ShowMapInfo = function(pn)
     local sT, tags = roundv.mapinfo, {}
@@ -660,9 +727,10 @@ end
 ----- EVENTS
 function eventChatCommand(pn, msg)
     local words = string_split(string.lower(msg), "%s")
-    if cmds[words[1]] then
-        if not cmds[words[1]].perms or players[pn].group >= cmds[words[1]].perms then
-            cmds[words[1]].func(pn, msg, table.unpack(words))
+    local cmd = cmds_alias[words[1]] or words[1]
+    if cmds[cmd] then
+        if not cmds[cmd].perms or players[pn].group >= cmds[cmd].perms then
+            cmds[cmd].func(pn, msg, table.unpack(words))
         else
             tfm.exec.chatMessage('<R>error: no authority', pn)
         end
@@ -684,9 +752,6 @@ function eventLoop(elapsed, remaining)
     if roundv.phase < 3 and remaining <= 0 then
         rotate_evt.timesup()
         roundv.phase = 3
-    end
-    if roundv.lobby then
-        ui.updateTextArea(WINDOW_LOBBY+21,"<p align='center'><font size='32'><VI>"..math_round(remaining/1000,0), nil)
     end
 end
 
@@ -735,6 +800,11 @@ function eventNewGame()
         end
     end
     assert(#roundv.shamans <= 2, "Shaman count is greater than 2: "..#roundv.shamans)
+
+    for name in pairs(pL.spectator) do
+        tfm.exec.killPlayer(name)
+        tfm.exec.setPlayerScore(name, -5)
+    end
 
     if roundv.lobby then
         if new_game_vars.previous_round then
@@ -817,7 +887,7 @@ function eventNewPlayer(pn)
     pL.room[pn] = true
     pL.dead[pn] = true
 
-    tfm.exec.chatMessage("\t<VP>Ξ Welcome to <b>Team Shaman (TSM)</b> v1.0! Ξ\n<J>Also known as Team Hard Mode, TSM is a building module where dual shamans take turns to spawn objects.\nPress H for more information.\n<R>NOTE: <VP>For development purposes this module will only run Team Divine Mode tentatively. As the module starts picking up shape, we'll gradually implement Team Hard Mode.", pn)
+    tfm.exec.chatMessage("\t<VP>Ξ Welcome to <b>Team Shaman (TSM)</b> v0.1 Alpha! Ξ\n<J>TSM is a building module where dual shamans take turns to spawn objects.\nPress H for more information.\n<R>NOTE: <VP>For development purposes this module will only run Team Divine Mode tentatively. As the module starts picking up shape, Team Hard Mode will be available.", pn)
 
     tfm.exec.setPlayerScore(pn, 0)
     tfm.exec.setShamanMode(pn, 2)  -- Force divine for TDM
@@ -843,6 +913,7 @@ end
 
 function eventPlayerLeft(pn)
     pL.room[pn] = nil
+    pL.spectator[pn] = nil
     sWindow.clearPlayer(pn)
 end
 
