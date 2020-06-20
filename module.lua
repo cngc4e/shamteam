@@ -800,9 +800,9 @@ function eventMouse(pn, x, y)
 end
 
 function eventNewGame()
-    print('ev newGame '..(new_game_vars.lobby and "is lobby" or "not lobby"))  -- temporary for debug b/3: init race condition
+    print('ev newGame '..(new_game_vars.lobby and "is lobby" or "not lobby"))  -- temporary for debug b/4: init race condition
     local mapcode = tonumber(tfm.get.room.currentMap:match('%d+'))
-    if (not module_started and mapcode ~= 7740307) or not tfm.get.room.xmlMapInfo then  -- workaround for b/3: init race condition
+    if (not module_started and mapcode ~= 7740307) or not tfm.get.room.xmlMapInfo then  -- workaround for b/4: init race condition
         roundv = { running = false }
         return
     end
