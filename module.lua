@@ -51,6 +51,13 @@ local WINDOW_SETTINGS = bit32.lshift(3, 7)
 -- TextAreas
 local TA_SPECTATING = 9000
 
+-- Link IDs
+local LINK_DISCORD = 1
+
+-- AntiLag ping (ms) thresholds
+local ANTILAG_WARN_THRESHOLD = 650
+local ANTILAG_FORCE_THRESHOLD = 1100
+
 -- GUI color defs
 local GUI_BTN = "<font color='#EDCC8D'>"
 
@@ -149,6 +156,7 @@ do
     end
 
     local function lobby()
+        print(debug.traceback("call lobby()"))  -- temporary for debug b/3: init race condition
         for name in pairs(pL.shaman) do
             players[name].internal_score = 0
             tfm.exec.setPlayerScore(name, 0)
@@ -281,7 +289,7 @@ do
 
                 if not tabs_k[tab] then return end
                 if not p_data.tab then
-                    ui.addTextArea(WINDOW_HELP+1,"",pn,75,40,650,340,0x4c1130,0x4c1130,1,true)  -- the background
+                    ui.addTextArea(WINDOW_HELP+1,"",pn,75,40,650,340,0x133337,0x133337,1,true)  -- the background
                 else  -- already opened before
                     if help_ta_range[p_data.tab] then
                         for i = help_ta_range[p_data.tab][1], help_ta_range[p_data.tab][2] do
@@ -302,10 +310,13 @@ do
                 p_data.tab = tab
 
                 if tab == "Welcome" then
-                    local text = [[
+                    local text = string.format([[
 <p align="center"><J><font size='14'><b>Welcome to #ShamTeam</b></font></p>
-<p align="left"><font size='12'><N>The gameplay is simple: You will pair with another shaman and take turns spawning objects. You earn points at the end of the round depending on mice saved. But be careful! If you make a mistake by spawning when it's not your turn, or dying, you and your partner will lose points! There will be mods that you can enable to make your gameplay a little bit more challenging, and should you win the round, your score will be multiplied accordingly. 
-                    ]]
+<p align="left"><font size='12'><N>Welcome to Team Shaman Mode (TSM)! The gameplay of TSM is simple: You will pair with another shaman and take turns spawning objects. You earn points at the end of the round depending on mice saved. But be careful! If you make a mistake by spawning when it's not your turn, or dying, you and your partner will lose points! There will be mods that you can enable to make your gameplay a little bit more challenging, and should you win the round, your score will be multiplied accordingly.
+
+Join our discord server for help and more information!
+Link: %s<a href="event:link!%s">discord.gg/YkzM4rh</a>
+                    ]], GUI_BTN, LINK_DISCORD)
                     ui.addTextArea(WINDOW_HELP+21,text,pn,88,95,625,nil,0,0,0,true)
                 elseif tab == "Commands" then
                     local text = [[
@@ -321,7 +332,7 @@ do
                 elseif tab == "Contributors" then
                     local text = [[
 <p align="center"><J><font size='14'><b>Contributors</b></font></p>
-<p align="left"><font size='12'><N>#shamteam is brought to you by the Academy of Building! It would not be possible without these people:
+<p align="left"><font size='12'><N>#shamteam is brought to you by the Academy of Building! It would not be possible without the following people:
 
 <J>Casserole#1798<N> - Developer
 <J>Emeryaurora#0000<N> - Module inspiration, module designer & mapcrew
@@ -331,8 +342,8 @@ do
 A full list of staff are available via the !staff command. 
                     ]]
                     ui.addTextArea(WINDOW_HELP+51,text,pn,88,95,625,nil,0,0,0,true)
-                    local img_id = tfm.exec.addImage("172cde7e326.png", "&"..WINDOW_HELP+51, 571, 180, pn)
-                    p_data.images[tab] = {img_id}
+                    --local img_id = tfm.exec.addImage("172cde7e326.png", "&1", 571, 180, pn)
+                    --p_data.images[tab] = {img_id}
                 end
 
             end,
@@ -358,7 +369,7 @@ A full list of staff are available via the !staff command.
         },
         [WINDOW_LOBBY] = {
             open = function(pn, p_data, tab)
-                ui.addTextArea(WINDOW_LOBBY+21,"<p align='center'><font size='32'><VI>20", nil, 370, 245, 50, nil,gui_bg,gui_b,gui_o,true)
+                ui.addTextArea(WINDOW_LOBBY+21,"<p align='center'><font size='32'><VI>20", nil, 370, 245, nil, nil,gui_bg,gui_b,gui_o,true)
 
             end,
             close = function(pn, p_data)
@@ -681,6 +692,16 @@ callbacks = {
         setSpectate(pn, false)
         tfm.exec.chatMessage("<ROSE>Welcome back! We've been expecting you.", pn)
     end,
+    link = function(pn, link_id)
+        -- Do not print out raw text from players! Use predefined IDs instead.
+        link_id = tonumber(link_id)
+        local links = {
+            [LINK_DISCORD] = "https://discord.gg/YkzM4rh",
+        }
+        if links[link_id] then
+            tfm.exec.chatMessage(links[link_id], pn)
+        end
+    end,
 }
 
 setSpectate = function(pn, b)
@@ -779,6 +800,7 @@ function eventMouse(pn, x, y)
 end
 
 function eventNewGame()
+    print('ev newGame '..(new_game_vars.lobby and "is lobby" or "not lobby"))  -- temporary for debug b/3: init race condition
     if not tfm.get.room.xmlMapInfo then
         roundv = { running = false }
         return
@@ -798,6 +820,7 @@ function eventNewGame()
         phase = 0,
         running = true,
         lobby = new_game_vars.lobby,
+        start_epoch = os.time(),
     }
 
     pL.dead = {}
@@ -866,6 +889,7 @@ function eventNewPlayer(pn)
             help = false,
         },
         keys = {},
+        sets = {},
         lang = "en",
         group = GROUP_PLAYER,
         internal_score = 0,
@@ -951,13 +975,12 @@ function eventSummoningStart(pn, type, xPos, yPos, angle)
 end
 
 function eventSummoningEnd(pn, type, xPos, yPos, angle, desc)
-    -- AntiLag™ by Leafileaf
-    -- TODO: !antilag + dynamic detection
     if roundv.startsummon then  -- workaround b/2: map prespawned object triggers summoning end event
-        if false and desc.baseType ~= 17 and desc.baseType ~= 32 then
+        -- AntiLag™ by Leafileaf
+        if players[pn].sets.antilag and desc.baseType ~= 17 and desc.baseType ~= 32 then
             tfm.exec.moveObject(desc.id, xPos, yPos, false, 0, 0, false, angle, false)
         end
-        if desc.baseType ~= 0 then
+        if not roundv.lobby and desc.baseType ~= 0 then
             local rightful_turn = roundv.shaman_turn
             if pn ~= roundv.shamans[rightful_turn] then
                 tfm.exec.removeObject(desc.id)
@@ -968,6 +991,19 @@ function eventSummoningEnd(pn, type, xPos, yPos, angle, desc)
                 UpdateTurnUI()
             end
         end
+    elseif roundv.lobby and type == 90 then
+        -- ping detector
+        if pL.shaman[pn] and roundv.start_epoch then
+            local ping = os.time() - roundv.start_epoch
+            ui.updateTextArea(WINDOW_LOBBY+21,"<p align='center'><font size='32'><VI>"..ping.."ms")
+            if ping >= ANTILAG_FORCE_THRESHOLD then
+                tfm.exec.chatMessage("<ROSE>Hey there, you appear to be really laggy. We have enabled AntiLag for you.", pn)
+                --players[pn].sets.antilag = true
+            elseif ping >= ANTILAG_WARN_THRESHOLD then
+                tfm.exec.chatMessage("<ROSE>Hey there, you appear to have lagged. You should enable AntiLag via the options menu (press O).", pn)
+            end
+        end
+        tfm.exec.chatMessage("[dbg] the sync is "..pn)
     end
 end
 
@@ -985,6 +1021,7 @@ function eventTextAreaCallback(id, pn, cb)
 end
 
 local init = function()
+    print("Module is starting...")
     for _,v in ipairs({'AfkDeath','AllShamanSkills','AutoNewGame','AutoScore','AutoTimeLeft','PhysicalConsumables'}) do
         tfm.exec['disable'..v](true)
     end
