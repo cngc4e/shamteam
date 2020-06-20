@@ -6,6 +6,7 @@ local dev = {["Cass11337#8417"]=true, ["Casserole#1798"]=true}
 local players = {}  -- module specific player data
 local roundv = {}  -- data spanning the lifetime of the round
 local new_game_vars = {}  -- data spanning the lifetime till the next eventNewGame
+local module_started = false
 
 -- Keeps an accurate list of players and their states by rely on asynchronous events to update
 -- This works around playerList issues which are caused by it relying on sync and can be slow to update
@@ -156,7 +157,6 @@ do
     end
 
     local function lobby()
-        print(debug.traceback("call lobby()"))  -- temporary for debug b/3: init race condition
         for name in pairs(pL.shaman) do
             players[name].internal_score = 0
             tfm.exec.setPlayerScore(name, 0)
@@ -801,10 +801,12 @@ end
 
 function eventNewGame()
     print('ev newGame '..(new_game_vars.lobby and "is lobby" or "not lobby"))  -- temporary for debug b/3: init race condition
-    if not tfm.get.room.xmlMapInfo then
+    local mapcode = tonumber(tfm.get.room.currentMap:match('%d+'))
+    if (not module_started and mapcode ~= 7740307) or not tfm.get.room.xmlMapInfo then  -- workaround for b/3: init race condition
         roundv = { running = false }
         return
     end
+    if not module_started then module_started = true end
     roundv = {
         mapinfo = {
             Wind = 0,
@@ -812,7 +814,7 @@ function eventNewGame()
             MGOC = 100,
             mirrored = tfm.get.room.mirroredMap,
             author = tfm.get.room.xmlMapInfo.author,
-            code = tonumber(tfm.get.room.currentMap:match('%d+'))
+            code = mapcode
         },
         shamans = {},
         shaman_turn = 1,
