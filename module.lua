@@ -999,8 +999,8 @@ function eventSummoningEnd(pn, type, xPos, yPos, angle, desc)
             if ping >= ANTILAG_FORCE_THRESHOLD then
                 tfm.exec.chatMessage("<ROSE>Hey there, you appear to be really laggy. We have enabled AntiLag for you.", pn)
                 --players[pn].sets.antilag = true
-            elseif ping >= ANTILAG_WARN_THRESHOLD then
-                tfm.exec.chatMessage("<ROSE>Hey there, you appear to have lagged. You should enable AntiLag via the options menu (press O).", pn)
+            elseif ping >= ANTILAG_WARN_THRESHOLD and not players[pn].sets.antilag then
+                tfm.exec.chatMessage("<ROSE>Hey there, you appear to have lagged. You should consider enabling AntiLag via the options menu (press O).", pn)
             end
         end
         tfm.exec.chatMessage("[dbg] the sync is "..pn)
