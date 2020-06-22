@@ -56,7 +56,7 @@ local TA_SPECTATING = 9000
 local LINK_DISCORD = 1
 
 -- AntiLag ping (ms) thresholds
-local ANTILAG_WARN_THRESHOLD = 650
+local ANTILAG_WARN_THRESHOLD = 690
 local ANTILAG_FORCE_THRESHOLD = 1100
 
 -- GUI color defs
@@ -369,11 +369,13 @@ A full list of staff are available via the !staff command.
         },
         [WINDOW_LOBBY] = {
             open = function(pn, p_data, tab)
-                ui.addTextArea(WINDOW_LOBBY+21,"<p align='center'><font size='32'><VI>20", nil, 370, 245, nil, nil,gui_bg,gui_b,gui_o,true)
-
+                ui.addTextArea(WINDOW_LOBBY+21,"",pn,75,40,650,340,1,0,.8,true)  -- the background
+                ui.addTextArea(WINDOW_LOBBY+22,"",pn,105,70,100,100,0xcdcdcd,0x676767,.1,true)
             end,
             close = function(pn, p_data)
-                ui.removeTextArea(WINDOW_LOBBY+21)
+                for i = 21, 22 do
+                    ui.removeTextArea(WINDOW_LOBBY+i)
+                end
             end,
             type = INDEPENDENT,
             players = {}
@@ -669,6 +671,17 @@ cmds = {
             end
         end,
         perms = GROUP_PLAYER
+    },
+    window = {
+        func = function(pn, m, w1, w2)
+            local w_id = tonumber(w2)
+            if sWindow.isOpened(w_id, pn) then
+                sWindow.close(w_id, pn)
+            else
+                sWindow.open(w_id, pn)
+            end
+        end,
+        perms = GROUP_DEV
     }
 }
 
@@ -708,8 +721,8 @@ setSpectate = function(pn, b)
     if b then
         pL.spectator[pn] = true
         players[pn].internal_score = -1
-        tfm.exec.setPlayerScore(pn, -5)
         tfm.exec.killPlayer(pn)
+        tfm.exec.setPlayerScore(pn, -5)
         ui.addTextArea(TA_SPECTATING, GUI_BTN.."<font size='14'><p align='center'><a href='event:unafk'>You have entered spectator mode.\nClick here to exit spectator mode.", pn, 190, 355, 420, nil, 1, 0, .7, true)
     else
         pL.spectator[pn] = nil
@@ -863,10 +876,15 @@ function eventNewGame()
         ui.setMapName("TSM LOBBY")
         tfm.exec.disableMortCommand(true)
     else
-        -- hide the GUI for shamans
+        
         for i = 1, #roundv.shamans do
             local name = roundv.shamans[i]
+            -- hide the GUI for shamans
             sWindow.close(WINDOW_GUI, name)
+            -- Set mode there and back; this teleports both shamans to the first spawnpoint
+            -- TODO: flip order for THM
+            tfm.exec.setShamanMode(name, 1)
+            tfm.exec.setShamanMode(name, 2)
         end
         sWindow.close(WINDOW_LOBBY, nil)
         tfm.exec.setGameTime(180)
@@ -967,37 +985,38 @@ function eventPlayerRespawn(pn)
 end
 
 function eventSummoningStart(pn, type, xPos, yPos, angle)
-    if type ~= 0 then
-        local rightful_turn = roundv.shaman_turn
-        if pn ~= roundv.shamans[rightful_turn] then
-            --tfm.exec.chatMessage("<J>Ξ It is not your turn to spawn yet! Take a chill pill!", pn)
-        end
-    end
     roundv.startsummon = true  -- workaround b/2
 end
 
 function eventSummoningEnd(pn, type, xPos, yPos, angle, desc)
+    local ping = nil
+    if roundv.start_epoch then
+        ping = os.time() - roundv.start_epoch
+    end
     if roundv.startsummon then  -- workaround b/2: map prespawned object triggers summoning end event
         -- AntiLag™ by Leafileaf
         if players[pn].sets.antilag and desc.baseType ~= 17 and desc.baseType ~= 32 then
             tfm.exec.moveObject(desc.id, xPos, yPos, false, 0, 0, false, angle, false)
         end
-        if not roundv.lobby and desc.baseType ~= 0 then
-            local rightful_turn = roundv.shaman_turn
-            if pn ~= roundv.shamans[rightful_turn] then
-                tfm.exec.removeObject(desc.id)
-                tfm.exec.chatMessage("<J>Ξ It is not your turn to spawn yet ya dummy!", pn)
+        if not roundv.lobby then
+            if type == 0 then
+                --points deduct
             else
-                if #roundv.shamans ~= 2 then return end
-                roundv.shaman_turn = rightful_turn == 1 and 2 or 1
-                UpdateTurnUI()
+                local rightful_turn = roundv.shaman_turn
+                if pn ~= roundv.shamans[rightful_turn] then
+                    tfm.exec.removeObject(desc.id)
+                    tfm.exec.chatMessage("<J>Ξ It is not your turn to spawn yet ya dummy!", pn)
+                    --points deduct
+                else
+                    if #roundv.shamans ~= 2 then return end
+                    roundv.shaman_turn = rightful_turn == 1 and 2 or 1
+                    UpdateTurnUI()
+                end
             end
         end
     elseif roundv.lobby and type == 90 then
         -- ping detector
-        if pL.shaman[pn] and roundv.start_epoch then
-            local ping = os.time() - roundv.start_epoch
-            ui.updateTextArea(WINDOW_LOBBY+21,"<p align='center'><font size='32'><VI>"..ping.."ms")
+        if pL.shaman[pn] and ping then
             if ping >= ANTILAG_FORCE_THRESHOLD then
                 tfm.exec.chatMessage("<ROSE>Hey there, you appear to be really laggy. We have enabled AntiLag for you.", pn)
                 --players[pn].sets.antilag = true
@@ -1005,7 +1024,7 @@ function eventSummoningEnd(pn, type, xPos, yPos, angle, desc)
                 tfm.exec.chatMessage("<ROSE>Hey there, you appear to have lagged. You should consider enabling AntiLag via the options menu (press O).", pn)
             end
         end
-        tfm.exec.chatMessage("[dbg] the sync is "..pn)
+        tfm.exec.chatMessage("[dbg] the sync is "..pn.." with a ping of "..(ping or "N/A").." ms")
     end
 end
 
