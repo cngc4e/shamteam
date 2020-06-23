@@ -384,13 +384,38 @@ A full list of staff are available via the !staff command.
         },
         [WINDOW_LOBBY] = {
             open = function(pn, p_data, tab)
-                ui.addTextArea(WINDOW_LOBBY+21,"",pn,75,40,650,340,1,0,.8,true)  -- the background
-                ui.addTextArea(WINDOW_LOBBY+22,"",pn,105,70,100,100,0xcdcdcd,0x676767,.1,true)
+                ui.addTextArea(WINDOW_LOBBY+1,"",pn,75,40,650,340,1,0,.8,true)  -- the background
+                ui.addTextArea(WINDOW_LOBBY+2,"<p align='center'><font size='13'>You’ve been chosen to pair up for the next round!",pn,75,50,650,nil,1,0,1,true)
+                ui.addTextArea(WINDOW_LOBBY+3,"",pn,120,85,265,200,0xcdcdcd,0xbababa,.1,true)
+                ui.addTextArea(WINDOW_LOBBY+4,"",pn,415,85,265,200,0xcdcdcd,0xbababa,.1,true)
+
+                ui.addTextArea(WINDOW_LOBBY+5,"<p align='center'><font size='13'><b>"..pDisp(roundv.shamans[1]),pn,118,90,269,nil,1,0,1,true)
+                ui.addTextArea(WINDOW_LOBBY+6,"<p align='center'><font size='13'><b>"..(pDisp(roundv.shamans[2]) or ''),pn,413,90,269,nil,1,0,1,true)
+
+                p_data.images[1] = tfm.exec.addImage("172e1332b11.png", "&1"..WINDOW_LOBBY+7, 202, 120, pn)  -- hard feather 30px width
+                p_data.images[2] = tfm.exec.addImage("172e14b438a.png", "&1", 272, 120, pn)  -- divine feather 30px width
+
+                ui.addTextArea(WINDOW_LOBBY+7,"<p align='center'><font size='13'><b>Difficulty",pn,120,184,265,nil,1,0,.2,true)
+                ui.addTextArea(WINDOW_LOBBY+8,"<p align='center'><font size='13'><b>1",pn,190,240,20,nil,1,0,.2,true)
+                ui.addTextArea(WINDOW_LOBBY+9,"<p align='center'><font size='13'>to",pn,242,240,30,nil,1,0,0,true)
+                ui.addTextArea(WINDOW_LOBBY+10,"<p align='center'><font size='13'><b>3",pn,304,240,20,nil,1,0,.2,true)
+                ui.addTextArea(WINDOW_LOBBY+11,"<p align='center'><font size='17'><b>&#x25B2;<br>&#x25BC;",pn,132,224,20,nil,1,0,0,true)
+                ui.addTextArea(WINDOW_LOBBY+12,"<p align='center'><font size='17'><b>&#x25B2;<br>&#x25BC;",pn,350,224,20,nil,1,0,0,true)
+
+                ui.addTextArea(WINDOW_LOBBY+21, GUI_BTN.."<font size='2'><br><font size='12'><p align='center'><a href='event:lobby!ready'>".."Ready".."</a>",pn,92,300,100,24,0x666666,0x676767,opacity,true)
             end,
             close = function(pn, p_data)
+                for i = 1, 12 do
+                    ui.removeTextArea(WINDOW_LOBBY+i)
+                end
                 for i = 21, 22 do
                     ui.removeTextArea(WINDOW_LOBBY+i)
                 end
+                print(#p_data.images)
+                for i = 1, #p_data.images do
+                    tfm.exec.removeImage(p_data.images[i], pn)
+                end
+                p_data.images = {}
             end,
             type = INDEPENDENT,
             players = {}
@@ -818,7 +843,7 @@ function eventLoop(elapsed, remaining)
         rotate_evt.timesup()
         roundv.phase = 3
     elseif roundv.lobby then
-        ui.setMapName(string.format("Next Shamans: %s - %s    |    Game starts in: %ss    |    Mice: %s<", pDisp(roundv.shamans[1]), pDisp(roundv.shamans[2]) or '', math_round(remaining/1000), pL.room._len))
+        ui.setMapName(string.format("<N>Next Shamans: <CH>%s <N>- <font color='#FEB1FC'>%s  <G>|  <N>Game starts in: <V>%s  <G>|  <N>Mice: <V>%s<", pDisp(roundv.shamans[1]), pDisp(roundv.shamans[2]) or '', math_round(remaining/1000), pL.room._len))
     end
 end
 
@@ -894,7 +919,6 @@ function eventNewGame()
         else
             tfm.exec.chatMessage("<R>Ξ No shaman pair!")
         end
-        ui.setMapName(string.format("Next Shamans: %s - %s    |    Game starts in: %ss    |    Mice: %s<", pDisp(roundv.shamans[1]), pDisp(roundv.shamans[2]) or '', 20, pL.room._len))
         tfm.exec.disableMortCommand(true)
     else
         
