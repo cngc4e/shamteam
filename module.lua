@@ -1,8 +1,4 @@
-
 local translations = {}
-local staff = {["Cass11337#8417"]=true, ["Emeryaurora#0000"]=true, ["Pegasusflyer#0000"]=true, ["Tactcat#0000"]=true, ["Leafileaf#0000"]=true, ["Rini#5475"]=true, ["Rayallan#0000"]=true}
-local dev = {["Cass11337#8417"]=true, ["Casserole#1798"]=true}
-
 local players = {}  -- module specific player data
 local roundv = {}  -- data spanning the lifetime of the round
 local new_game_vars = {}  -- data spanning the lifetime till the next eventNewGame
@@ -61,6 +57,16 @@ local ANTILAG_FORCE_THRESHOLD = 1100
 
 -- GUI color defs
 local GUI_BTN = "<font color='#EDCC8D'>"
+
+-- Others
+local staff = {["Cass11337#8417"]=true, ["Emeryaurora#0000"]=true, ["Pegasusflyer#0000"]=true, ["Tactcat#0000"]=true, ["Leafileaf#0000"]=true, ["Rini#5475"]=true, ["Rayallan#0000"]=true}
+local dev = {["Cass11337#8417"]=true, ["Casserole#1798"]=true}
+local mods = {
+    {"Telepathic Communication", 0.5, "Disables prespawn preview. You won't be able to see what and where your partner is trying to spawn."},
+    {"We Work Fast!", 0.3, "Reduces building time limit by 60 seconds. For the quick hands."},
+    {"Butter Fingers", -0.5, "Allows you and your partner to undo the last spawned object up to two times."},
+    {"Snail Nail", -0.5, "Increases building time limit by 30 seconds. More time for our nails to arrive."},
+}
 
 ----- Forward declarations (local)
 local keys, cmds, cmds_alias, callbacks, sWindow, setSpectate
@@ -163,8 +169,8 @@ do
     local function rotate()
         local diff,map
         repeat
-            diff = math.random(1, #mapdb['tdm'])  -- TODO: user-defined diff, and mode!
-            map = mapdb['tdm'][diff][ math.random(1,#mapdb['tdm'][diff])]
+            diff = math.random(roundv.diff1, roundv.diff2)  -- TODO: user-defined diff, and mode!
+            map = mapdb[roundv.mode][diff][ math.random(1,#mapdb[roundv.mode][diff])]
         until not roundv.previousmap or tonumber(map) ~= roundv.previousmap
         new_game_vars.difficulty = diff
 
@@ -253,6 +259,7 @@ do
     local function timesup()
         if not roundv.running then return end
         if roundv.lobby then
+            sWindow.close(WINDOW_LOBBY, nil)
             rotate()
         else
             lobby()
@@ -386,29 +393,37 @@ A full list of staff are available via the !staff command.
             open = function(pn, p_data, tab)
                 ui.addTextArea(WINDOW_LOBBY+1,"",pn,75,40,650,340,1,0,.8,true)  -- the background
                 ui.addTextArea(WINDOW_LOBBY+2,"<p align='center'><font size='13'>You’ve been chosen to pair up for the next round!",pn,75,50,650,nil,1,0,1,true)
+
+                -- shaman cards
                 ui.addTextArea(WINDOW_LOBBY+3,"",pn,120,85,265,200,0xcdcdcd,0xbababa,.1,true)
                 ui.addTextArea(WINDOW_LOBBY+4,"",pn,415,85,265,200,0xcdcdcd,0xbababa,.1,true)
-
                 ui.addTextArea(WINDOW_LOBBY+5,"<p align='center'><font size='13'><b>"..pDisp(roundv.shamans[1]),pn,118,90,269,nil,1,0,1,true)
-                ui.addTextArea(WINDOW_LOBBY+6,"<p align='center'><font size='13'><b>"..(pDisp(roundv.shamans[2]) or ''),pn,413,90,269,nil,1,0,1,true)
+                ui.addTextArea(WINDOW_LOBBY+6,"<p align='center'><font size='13'><b>"..(pDisp(roundv.shamans[2]) or 'N/A'),pn,413,90,269,nil,1,0,1,true)
 
-                p_data.images[1] = tfm.exec.addImage("172e1332b11.png", "&1"..WINDOW_LOBBY+7, 202, 120, pn)  -- hard feather 30px width
+                -- mode
+                p_data.images[1] = tfm.exec.addImage("172e1332b11.png", ":1"..WINDOW_LOBBY+7, 202, 120, pn)  -- hard feather 30px width
                 p_data.images[2] = tfm.exec.addImage("172e14b438a.png", "&1", 272, 120, pn)  -- divine feather 30px width
 
+                -- difficulty
                 ui.addTextArea(WINDOW_LOBBY+7,"<p align='center'><font size='13'><b>Difficulty",pn,120,184,265,nil,1,0,.2,true)
-                ui.addTextArea(WINDOW_LOBBY+8,"<p align='center'><font size='13'><b>1",pn,190,240,20,nil,1,0,.2,true)
-                ui.addTextArea(WINDOW_LOBBY+9,"<p align='center'><font size='13'>to",pn,242,240,30,nil,1,0,0,true)
-                ui.addTextArea(WINDOW_LOBBY+10,"<p align='center'><font size='13'><b>3",pn,304,240,20,nil,1,0,.2,true)
-                ui.addTextArea(WINDOW_LOBBY+11,"<p align='center'><font size='17'><b>&#x25B2;<br>&#x25BC;",pn,132,224,20,nil,1,0,0,true)
-                ui.addTextArea(WINDOW_LOBBY+12,"<p align='center'><font size='17'><b>&#x25B2;<br>&#x25BC;",pn,350,224,20,nil,1,0,0,true)
+                ui.addTextArea(WINDOW_LOBBY+8,"<p align='center'><font size='13'>to",pn,242,240,30,nil,1,0,0,true)
+                ui.addTextArea(WINDOW_LOBBY+9,"<p align='center'><font size='13'><b>"..roundv.diff1,pn,190,240,20,nil,1,0,.2,true)
+                ui.addTextArea(WINDOW_LOBBY+10,"<p align='center'><font size='13'><b>"..roundv.diff2,pn,299,240,20,nil,1,0,.2,true)
+                ui.addTextArea(WINDOW_LOBBY+11,GUI_BTN.."<p align='center'><font size='17'><b><a href='event:diff!1&1'>&#x25B2;</a><br><a href='event:diff!1&-1'>&#x25BC;",pn,132,224,20,nil,1,0,0,true)
+                ui.addTextArea(WINDOW_LOBBY+12,GUI_BTN.."<p align='center'><font size='17'><b><a href='event:diff!2&1'>&#x25B2;</a><br><a href='event:diff!2&-1'>&#x25BC;",pn,350,224,20,nil,1,0,0,true)
 
-                ui.addTextArea(WINDOW_LOBBY+21, GUI_BTN.."<font size='2'><br><font size='12'><p align='center'><a href='event:lobby!ready'>".."Ready".."</a>",pn,92,300,100,24,0x666666,0x676767,opacity,true)
+                -- mods
+                for i = 1, #mods do
+                    ui.addTextArea(WINDOW_LOBBY+30+i, mods[i][1], pn,430,125+((i-1)*30),110,20,1,0,.2,true)
+                end
+
+                ui.addTextArea(WINDOW_LOBBY+13, GUI_BTN.."<font size='2'><br><font size='12'><p align='center'><a href='event:ready'>".."Ready".."</a>",pn,120,320,100,24,0x666666,0x676767,opacity,true)
             end,
             close = function(pn, p_data)
-                for i = 1, 12 do
+                for i = 1, 13 do
                     ui.removeTextArea(WINDOW_LOBBY+i)
                 end
-                for i = 21, 22 do
+                for i = 31, 31+#mods do
                     ui.removeTextArea(WINDOW_LOBBY+i)
                 end
                 print(#p_data.images)
@@ -731,7 +746,7 @@ cmds_alias = {
     unafk = "spectate",
 }
 
--- NOTE: It is possible for players to alter callback strings, ensure
+-- WARNING: It is possible for players to alter callback strings, ensure
 -- that callbacks are designed to protect against bad inputs!
 callbacks = {
     help = function(pn, tab)
@@ -753,6 +768,36 @@ callbacks = {
         }
         if links[link_id] then
             tfm.exec.chatMessage(links[link_id], pn)
+        end
+    end,
+    diff = function(pn, id, add)
+        id = tonumber(id) or 0
+        add = tonumber(add) or 0
+        if not roundv.running or not roundv.lobby 
+                or pn ~= roundv.shamans[1] -- only shaman #1 gets to choose difficulty
+                or (id ~= 1 and id ~= 2)
+                or (add ~= -1 and add ~= 1) then
+            return
+        end
+        local diff_id = "diff"..id
+        local new_diff = roundv[diff_id] + add
+
+        if new_diff < 1 or new_diff > #mapdb[roundv.mode]
+                or (id == 1 and roundv.diff2 - new_diff < 1)
+                or (id == 2 and new_diff - roundv.diff1 < 1) then  -- range error
+            tfm.exec.chatMessage(string.format("<R>error: range must have a value of 1-%s and have a difference of at least 1", #mapdb[roundv.mode]))
+            return
+        end
+
+        roundv[diff_id] = new_diff
+        ui.updateTextArea(WINDOW_LOBBY+9,"<p align='center'><font size='13'><b>"..roundv.diff1)
+        ui.updateTextArea(WINDOW_LOBBY+10,"<p align='center'><font size='13'><b>"..roundv.diff2)
+    end,
+    ready = function(pn)
+        if roundv.shamans[1] == pn then
+            rotate_evt.timesup()
+        elseif roundv.shamans[2] == pn then
+            rotate_evt.timesup()
         end
     end,
 }
@@ -877,7 +922,6 @@ function eventNewGame()
         shaman_turn = 1,
         difficulty = new_game_vars.difficulty or 0,
         phase = 0,
-        running = true,
         lobby = new_game_vars.lobby,
         start_epoch = os.time(),
     }
@@ -905,6 +949,9 @@ function eventNewGame()
     end
 
     if roundv.lobby then
+        roundv.diff1 = 1
+        roundv.diff2 = 3
+        roundv.mode = 'tdm'
         if new_game_vars.previous_round then
             -- show back the GUI for the previous round of shamans
             for i = 1, #new_game_vars.previous_round.shamans do
@@ -921,7 +968,6 @@ function eventNewGame()
         end
         tfm.exec.disableMortCommand(true)
     else
-        
         for i = 1, #roundv.shamans do
             local name = roundv.shamans[i]
             -- hide the GUI for shamans
@@ -931,7 +977,6 @@ function eventNewGame()
             tfm.exec.setShamanMode(name, 1)
             tfm.exec.setShamanMode(name, 2)
         end
-        sWindow.close(WINDOW_LOBBY, nil)
         tfm.exec.setGameTime(180)
         ReadXML()
         ShowMapInfo()
@@ -945,6 +990,7 @@ function eventNewGame()
         tfm.exec.disableMortCommand(false)
     end
     new_game_vars = {}
+    roundv.running = true
 end
 
 function eventNewPlayer(pn)
