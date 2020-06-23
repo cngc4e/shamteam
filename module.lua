@@ -11,12 +11,12 @@ local module_started = false
 -- Keeps an accurate list of players and their states by rely on asynchronous events to update
 -- This works around playerList issues which are caused by it relying on sync and can be slow to update
 local pL = {
-    room = {},
-    alive = {},
-    dead = {},
-    shaman = {},
-    non_shaman = {},
-    spectator = {},
+    room = { _len = 0 },
+    alive = { _len = 0 },
+    dead = { _len = 0},
+    shaman = { _len = 0 },
+    non_shaman = { _len = 0 },
+    spectator = { _len = 0 },
 }
 
 -- TODO: temporary..
@@ -87,6 +87,21 @@ local function table_copy(tbl)
     return out
 end
 
+-- iterate over a key-value pair table, skipping the "_len" key
+local function cnext(tbl, k)
+    local v
+    k, v = next(tbl, k)
+    if k~="_len" then 
+        return k,v
+    else
+        k, v = next(tbl, k)
+        return k,v
+    end
+end
+local function cpairs(tbl)
+    return cnext, tbl, nil
+end
+
 local function ZeroTag(pn, add) --#0000 removed for tag matches
     if add then
         if not pn:find('#') then
@@ -108,7 +123,7 @@ end
 
 local function pDisp(pn)
     -- TODO: check if the player has the same name as another existing player in the room.
-    return pn:find('#') and pn:sub(1,-6) or pn
+    return pn and (pn:find('#') and pn:sub(1,-6)) or nil
 end
 
 ----- LIBS / HELPERS
@@ -157,14 +172,14 @@ do
     end
 
     local function lobby()
-        for name in pairs(pL.shaman) do
+        for name in cpairs(pL.shaman) do
             players[name].internal_score = 0
             tfm.exec.setPlayerScore(name, 0)
         end
 
         local highest = {-1}
         local second_highest = nil
-        for name in pairs(pL.room) do
+        for name in cpairs(pL.room) do
             if not pL.spectator[name] then
                 players[name].internal_score = players[name].internal_score + 1
                 if players[name].internal_score >= highest[1] then
@@ -195,7 +210,7 @@ do
     local function diedwon(type, pn)
         local allplayerdead = true
         local allnonshamdead = true
-        for name in pairs(pL.room) do
+        for name in cpairs(pL.room) do
             if not pL.dead[name] then allplayerdead = false end
             if not pL.dead[name] and pL.non_shaman[name] then allnonshamdead = false end
         end
@@ -718,14 +733,16 @@ callbacks = {
 }
 
 setSpectate = function(pn, b)
-    if b then
+    if b and not pL.spectator[pn] then
         pL.spectator[pn] = true
+        pL.spectator._len = pL.spectator._len + 1
         players[pn].internal_score = -1
         tfm.exec.killPlayer(pn)
         tfm.exec.setPlayerScore(pn, -5)
         ui.addTextArea(TA_SPECTATING, GUI_BTN.."<font size='14'><p align='center'><a href='event:unafk'>You have entered spectator mode.\nClick here to exit spectator mode.", pn, 190, 355, 420, nil, 1, 0, .7, true)
-    else
+    elseif pL.spectator[pn] then
         pL.spectator[pn] = nil
+        pL.spectator._len = pL.spectator._len - 1
         players[pn].internal_score = 0
         tfm.exec.setPlayerScore(pn, 0)
         ui.removeTextArea(TA_SPECTATING, pn)
@@ -800,6 +817,8 @@ function eventLoop(elapsed, remaining)
     if roundv.phase < 3 and remaining <= 0 then
         rotate_evt.timesup()
         roundv.phase = 3
+    elseif roundv.lobby then
+        ui.setMapName(string.format("Next Shamans: %s - %s    |    Game starts in: %ss    |    Mice: %s<", pDisp(roundv.shamans[1]), pDisp(roundv.shamans[2]) or '', math_round(remaining/1000), pL.room._len))
     end
 end
 
@@ -838,22 +857,24 @@ function eventNewGame()
         start_epoch = os.time(),
     }
 
-    pL.dead = {}
+    pL.dead = { _len = 0 }
     pL.alive = table_copy(pL.room)
-    pL.shaman = {}
-    pL.non_shaman = {}
+    pL.shaman = { _len = 0 }
+    pL.non_shaman = { _len = 0 }
 
     for name, p in pairs(tfm.get.room.playerList) do
         if p.isShaman then
             roundv.shamans[#roundv.shamans+1] = name
             pL.shaman[name] = true
+            pL.shaman._len = pL.shaman._len + 1
         else
             pL.non_shaman[name] = true
+            pL.non_shaman._len = pL.non_shaman._len + 1
         end
     end
     assert(#roundv.shamans <= 2, "Shaman count is greater than 2: "..#roundv.shamans)
 
-    for name in pairs(pL.spectator) do
+    for name in cpairs(pL.spectator) do
         tfm.exec.killPlayer(name)
         tfm.exec.setPlayerScore(name, -5)
     end
@@ -873,7 +894,7 @@ function eventNewGame()
         else
             tfm.exec.chatMessage("<R>Ξ No shaman pair!")
         end
-        ui.setMapName("TSM LOBBY")
+        ui.setMapName(string.format("Next Shamans: %s - %s    |    Game starts in: %ss    |    Mice: %s<", pDisp(roundv.shamans[1]), pDisp(roundv.shamans[2]) or '', 20, pL.room._len))
         tfm.exec.disableMortCommand(true)
     else
         
@@ -939,11 +960,13 @@ function eventNewPlayer(pn)
     end
 
     local load_lobby = false
-    if #pL.room == 1 and false then  -- TODO: restart to the lobby, doesn't work well atm
+    if pL.room._len == 1 and false then  -- TODO: restart to the lobby, doesn't work well atm
         load_lobby = true
     end
     pL.room[pn] = true
+    pL.room._len = pL.room._len + 1
     pL.dead[pn] = true
+    pL.dead._len = pL.dead._len + 1
 
     tfm.exec.chatMessage("\t<VP>Ξ Welcome to <b>Team Shaman (TSM)</b> v0.1 Alpha! Ξ\n<J>TSM is a building module where dual shamans take turns to spawn objects.\nPress H for more information.\n<R>NOTE: <VP>For development purposes this module will only run Team Divine Mode tentatively. As the module starts picking up shape, Team Hard Mode will be available.", pn)
 
@@ -959,19 +982,27 @@ end
 
 function eventPlayerDied(pn)
     pL.alive[pn] = nil
+    pL.alive._len = pL.alive._len - 1
     pL.dead[pn] = true
+    pL.dead._len = pL.dead._len + 1
     rotate_evt.died(pn)
 end
 
 function eventPlayerWon(pn, elapsed)
     pL.alive[pn] = nil
+    pL.alive._len = pL.alive._len - 1
     pL.dead[pn] = true
+    pL.dead._len = pL.dead._len + 1
     rotate_evt.won(pn)
 end
 
 function eventPlayerLeft(pn)
     pL.room[pn] = nil
-    pL.spectator[pn] = nil
+    pL.room._len = pL.room._len - 1
+    if pL.spectator[pn] then
+        pL.spectator[pn] = nil
+        pL.spectator._len = pL.spectator._len - 1
+    end
     if players[pn].pair then
         local target = players[pn].pair
         players[target].pair = nil
@@ -981,7 +1012,9 @@ end
 
 function eventPlayerRespawn(pn)
     pL.dead[pn] = nil
+    pL.dead._len = pL.dead._len - 1
     pL.alive[pn] = true
+    pL.alive._len = pL.alive._len + 1
 end
 
 function eventSummoningStart(pn, type, xPos, yPos, angle)
