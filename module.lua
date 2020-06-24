@@ -48,6 +48,12 @@ local WINDOW_SETTINGS = bit32.lshift(3, 7)
 -- TextAreas
 local TA_SPECTATING = 9000
 
+-- MOD FLAGS
+local MOD_TELEPATHY = bit32.lshift(1, 0)
+local MOD_WORK_FAST = bit32.lshift(1, 1)
+local MOD_BUTTER_FINGERS = bit32.lshift(1, 2)
+local MOD_SNAIL_NAIL = bit32.lshift(1, 3)
+
 -- Link IDs
 local LINK_DISCORD = 1
 
@@ -58,14 +64,22 @@ local ANTILAG_FORCE_THRESHOLD = 1100
 -- GUI color defs
 local GUI_BTN = "<font color='#EDCC8D'>"
 
+-- Images
+local IMG_FEATHER_HARD = "172e1332b11.png" -- hard feather 30px width
+local IMG_FEATHER_DIVINE = "172e14b438a.png"-- divine feather 30px width
+local IMG_TOGGLE_ON = "172e5c315f1.png"
+local IMG_TOGGLE_OFF = "172e5c335e7.png"
+local IMG_LOBBY_BG = "172e68f8d24.png"
+
 -- Others
 local staff = {["Cass11337#8417"]=true, ["Emeryaurora#0000"]=true, ["Pegasusflyer#0000"]=true, ["Tactcat#0000"]=true, ["Leafileaf#0000"]=true, ["Rini#5475"]=true, ["Rayallan#0000"]=true}
 local dev = {["Cass11337#8417"]=true, ["Casserole#1798"]=true}
 local mods = {
-    {"Telepathic Communication", 0.5, "Disables prespawn preview. You won't be able to see what and where your partner is trying to spawn."},
-    {"We Work Fast!", 0.3, "Reduces building time limit by 60 seconds. For the quick hands."},
-    {"Butter Fingers", -0.5, "Allows you and your partner to undo the last spawned object up to two times."},
-    {"Snail Nail", -0.5, "Increases building time limit by 30 seconds. More time for our nails to arrive."},
+    [MOD_TELEPATHY] = {"Telepathic Communication", 0.5, "Disables prespawn preview. You won't be able to see what and where your partner is trying to spawn."},
+    [MOD_WORK_FAST] = {"We Work Fast!", 0.3, "Reduces building time limit by 60 seconds. For the quick hands."},
+    [MOD_BUTTER_FINGERS] = {"Butter Fingers", -0.5, "Allows you and your partner to undo the last spawned object up to two times."},
+    [MOD_SNAIL_NAIL] = {"Snail Nail", -0.5, "Increases building time limit by 30 seconds. More time for our nails to arrive."},
+    _len = 4,
 }
 
 ----- Forward declarations (local)
@@ -173,6 +187,7 @@ do
             map = mapdb[roundv.mode][diff][ math.random(1,#mapdb[roundv.mode][diff])]
         until not roundv.previousmap or tonumber(map) ~= roundv.previousmap
         new_game_vars.difficulty = diff
+        new_game_vars.mods = roundv.mods
 
         map_sched.load(map)
     end
@@ -391,18 +406,19 @@ A full list of staff are available via the !staff command.
         },
         [WINDOW_LOBBY] = {
             open = function(pn, p_data, tab)
-                ui.addTextArea(WINDOW_LOBBY+1,"",pn,75,40,650,340,1,0,.8,true)  -- the background
+                --ui.addTextArea(WINDOW_LOBBY+1,"",pn,75,40,650,340,1,0,.8,true)  -- the background
                 ui.addTextArea(WINDOW_LOBBY+2,"<p align='center'><font size='13'>You’ve been chosen to pair up for the next round!",pn,75,50,650,nil,1,0,1,true)
+                p_data.images[6000] = {tfm.exec.addImage(IMG_LOBBY_BG, ":"..WINDOW_LOBBY, 70, 40, pn)}
 
                 -- shaman cards
-                ui.addTextArea(WINDOW_LOBBY+3,"",pn,120,85,265,200,0xcdcdcd,0xbababa,.1,true)
-                ui.addTextArea(WINDOW_LOBBY+4,"",pn,415,85,265,200,0xcdcdcd,0xbababa,.1,true)
+                --ui.addTextArea(WINDOW_LOBBY+3,"",pn,120,85,265,200,0xcdcdcd,0xbababa,.1,true)
+                --ui.addTextArea(WINDOW_LOBBY+4,"",pn,415,85,265,200,0xcdcdcd,0xbababa,.1,true)
                 ui.addTextArea(WINDOW_LOBBY+5,"<p align='center'><font size='13'><b>"..pDisp(roundv.shamans[1]),pn,118,90,269,nil,1,0,1,true)
                 ui.addTextArea(WINDOW_LOBBY+6,"<p align='center'><font size='13'><b>"..(pDisp(roundv.shamans[2]) or 'N/A'),pn,413,90,269,nil,1,0,1,true)
 
                 -- mode
-                p_data.images[1] = tfm.exec.addImage("172e1332b11.png", ":1"..WINDOW_LOBBY+7, 202, 120, pn)  -- hard feather 30px width
-                p_data.images[2] = tfm.exec.addImage("172e14b438a.png", "&1", 272, 120, pn)  -- divine feather 30px width
+                p_data.images[6001] = {tfm.exec.addImage(IMG_FEATHER_HARD, ":"..WINDOW_LOBBY, 202, 120, pn)}
+                p_data.images[6002] = {tfm.exec.addImage(IMG_FEATHER_DIVINE, ":"..WINDOW_LOBBY, 272, 120, pn)}
 
                 -- difficulty
                 ui.addTextArea(WINDOW_LOBBY+7,"<p align='center'><font size='13'><b>Difficulty",pn,120,184,265,nil,1,0,.2,true)
@@ -413,22 +429,31 @@ A full list of staff are available via the !staff command.
                 ui.addTextArea(WINDOW_LOBBY+12,GUI_BTN.."<p align='center'><font size='17'><b><a href='event:diff!2&1'>&#x25B2;</a><br><a href='event:diff!2&-1'>&#x25BC;",pn,350,224,20,nil,1,0,0,true)
 
                 -- mods
-                for i = 1, #mods do
-                    ui.addTextArea(WINDOW_LOBBY+30+i, mods[i][1], pn,430,125+((i-1)*30),110,20,1,0,.2,true)
+                local mods_str = {}
+                local i = 1
+                for k, mod in cpairs(mods) do
+                    --ui.addTextArea(WINDOW_LOBBY+30+i, mods[i][1], pn,430,125+((i-1)*30),110,20,1,0,.2,true)
+                    mods_str[#mods_str+1] = string.format("<a href='event:modtoggle!%s'>%s", k, mod[1])
+                    local is_set = bit32.band(roundv.mods, k) ~= 0
+                    local x, y = 640, 120+((i-1)*25)
+                    p_data.images[k] = {tfm.exec.addImage(is_set and IMG_TOGGLE_ON or IMG_TOGGLE_OFF, ":"..WINDOW_LOBBY, x, y, pn), x, y}
+                    ui.addTextArea(WINDOW_LOBBY+80+i,string.format("<a href='event:modtoggle!%s'><font size='15'> <br>", k),pn,x-2,y+3,35,18,1,0xfffff,0,true)
+                    i = i+1
                 end
+                ui.addTextArea(WINDOW_LOBBY+14, table.concat(mods_str, "\n\n").."\n", pn,430,125,200,nil,1,0,0,true)
 
-                ui.addTextArea(WINDOW_LOBBY+13, GUI_BTN.."<font size='2'><br><font size='12'><p align='center'><a href='event:ready'>".."Ready".."</a>",pn,120,320,100,24,0x666666,0x676767,opacity,true)
+                -- ready
+                ui.addTextArea(WINDOW_LOBBY+15, GUI_BTN.."<font size='2'><br><font size='12'><p align='center'><a href='event:ready'>".."Ready".."</a>",pn,120,320,100,24,0x666666,0x676767,opacity,true)
             end,
             close = function(pn, p_data)
-                for i = 1, 13 do
+                for i = 1, 15 do
                     ui.removeTextArea(WINDOW_LOBBY+i)
                 end
-                for i = 31, 31+#mods do
+                for i = 81, 80+mods._len do
                     ui.removeTextArea(WINDOW_LOBBY+i)
                 end
-                print(#p_data.images)
-                for i = 1, #p_data.images do
-                    tfm.exec.removeImage(p_data.images[i], pn)
+                for type_id, img_dat in pairs(p_data.images) do
+                    tfm.exec.removeImage(img_dat[1], pn)
                 end
                 p_data.images = {}
             end,
@@ -482,6 +507,13 @@ A full list of staff are available via the !staff command.
             and windows[window_id].players[pn]
             and windows[window_id].players[pn].is_open
     end
+
+    sWindow.getImages = function(window_id, pn)
+        if sWindow.isOpened(window_id, pn) then
+            return windows[window_id].players[pn].images
+        end
+        return {}
+    end 
 end
 
 keys = {
@@ -503,6 +535,20 @@ keys = {
                 sWindow.close(WINDOW_HELP, pn)
             else
                 sWindow.open(WINDOW_HELP, pn)
+            end
+        end,
+        trigger = DOWN_ONLY
+    },
+    [85] = {
+        func = function(pn) -- u (undo spawn)
+            if not pL.shaman[pn] then return end
+            local sl = roundv.spawnlist[pn]
+            if sl._len > 0 and roundv.undo_count < 2 then
+                tfm.exec.removeObject(sl[sl._len])
+                sl[sl._len] = nil
+                sl._len = sl._len - 1
+                roundv.undo_count = roundv.undo_count + 1
+                tfm.exec.chatMessage(string.format("<ROSE>%s used an undo! (%s left)", pn, 2 - roundv.undo_count))
             end
         end,
         trigger = DOWN_ONLY
@@ -785,7 +831,7 @@ callbacks = {
         if new_diff < 1 or new_diff > #mapdb[roundv.mode]
                 or (id == 1 and roundv.diff2 - new_diff < 1)
                 or (id == 2 and new_diff - roundv.diff1 < 1) then  -- range error
-            tfm.exec.chatMessage(string.format("<R>error: range must have a value of 1-%s and have a difference of at least 1", #mapdb[roundv.mode]))
+            tfm.exec.chatMessage(string.format("<R>error: range must have a value of 1-%s and have a difference of at least 1", #mapdb[roundv.mode]), pn)
             return
         end
 
@@ -794,10 +840,27 @@ callbacks = {
         ui.updateTextArea(WINDOW_LOBBY+10,"<p align='center'><font size='13'><b>"..roundv.diff2)
     end,
     ready = function(pn)
+        if not roundv.running or not roundv.lobby then return end
         if roundv.shamans[1] == pn then
             rotate_evt.timesup()
         elseif roundv.shamans[2] == pn then
             rotate_evt.timesup()
+        end
+    end,
+    modtoggle = function(pn, mod_id)
+        mod_id = tonumber(mod_id)
+        if not roundv.running or not roundv.lobby or not mod_id or not mods[mod_id]
+                or pn ~= roundv.shamans[2] then -- only shaman #2 gets to choose mods
+            return
+        end
+        roundv.mods = bit32.bxor(roundv.mods, mod_id)  -- flip and toggle the flag
+        local is_set = bit32.band(roundv.mods, mod_id) ~= 0
+        for name in cpairs(pL.room) do
+            local img_dats = sWindow.getImages(WINDOW_LOBBY, name)
+            if img_dats[mod_id] then
+                tfm.exec.removeImage(img_dats[mod_id][1])
+                img_dats[mod_id][1] = tfm.exec.addImage(is_set and IMG_TOGGLE_ON or IMG_TOGGLE_OFF, ":"..WINDOW_LOBBY, img_dats[mod_id][2], img_dats[mod_id][3])
+            end
         end
     end,
 }
@@ -830,7 +893,18 @@ local ShowMapInfo = function(pn)
     if #tags > 0 then
         strT[#strT+1] = string.format("Tags: %s", table.concat(tags, ", "))
     end
-    tfm.exec.chatMessage("<N>"..table.concat(strT, "\n"),pn,"N")
+    tfm.exec.chatMessage("<N>"..table.concat(strT, "\n"),pn)
+end
+
+local ShowMods = function(pn)
+    local m = { _len = 0 }
+    for k, mod in cpairs(mods) do
+        if bit32.band(roundv.mods, k) ~= 0 then
+            m[m._len+1] = mod[1]
+            m._len = m._len+1
+        end
+    end
+    tfm.exec.chatMessage("<J>Mods: <N>"..table.concat(m, ", "), pn)
 end
 
 local ReadXML = function()
@@ -920,10 +994,13 @@ function eventNewGame()
         },
         shamans = {},
         shaman_turn = 1,
+        undo_count = 0,
+        spawnlist = {},
         difficulty = new_game_vars.difficulty or 0,
         phase = 0,
         lobby = new_game_vars.lobby,
         start_epoch = os.time(),
+        mods = new_game_vars.mods or 0,
     }
 
     pL.dead = { _len = 0 }
@@ -967,19 +1044,26 @@ function eventNewGame()
             tfm.exec.chatMessage("<R>Ξ No shaman pair!")
         end
         tfm.exec.disableMortCommand(true)
+        tfm.exec.disablePrespawnPreview(false)
     else
         for i = 1, #roundv.shamans do
             local name = roundv.shamans[i]
+
+            roundv.spawnlist[name] = { _len = 0 }
+
             -- hide the GUI for shamans
             sWindow.close(WINDOW_GUI, name)
+            
             -- Set mode there and back; this teleports both shamans to the first spawnpoint
             -- TODO: flip order for THM
             tfm.exec.setShamanMode(name, 1)
             tfm.exec.setShamanMode(name, 2)
+
         end
-        tfm.exec.setGameTime(180)
+
         ReadXML()
         ShowMapInfo()
+        ShowMods()
         if #roundv.shamans == 2 then
             tfm.exec.chatMessage(string.format("<ROSE>Ξ <CH>%s <ROSE>& <font color='#FEB1FC'>%s <ROSE>are now the shaman pair!", pDisp(roundv.shamans[1]), pDisp(roundv.shamans[2])))
         else
@@ -987,7 +1071,18 @@ function eventNewGame()
         end
         UpdateTurnUI()
         ui.setMapName("<VI>[TDM] <ROSE>Difficulty "..roundv.difficulty.." - <VP>@"..roundv.mapinfo.code)
+        
         tfm.exec.disableMortCommand(false)
+        tfm.exec.disablePrespawnPreview(bit32.band(roundv.mods, MOD_TELEPATHY) ~= 0)
+
+        local time_limit = 180  -- TODO: 200 for THM
+        if bit32.band(roundv.mods, MOD_WORK_FAST) ~= 0 then
+            time_limit = time_limit - 60
+        end
+        if bit32.band(roundv.mods, MOD_SNAIL_NAIL) ~= 0 then
+            time_limit = time_limit + 30
+        end
+        tfm.exec.setGameTime(time_limit)
     end
     new_game_vars = {}
     roundv.running = true
@@ -1102,8 +1197,8 @@ function eventSummoningEnd(pn, type, xPos, yPos, angle, desc)
             tfm.exec.moveObject(desc.id, xPos, yPos, false, 0, 0, false, angle, false)
         end
         if not roundv.lobby then
-            if type == 0 then
-                --points deduct
+            if type == 0 then  -- arrow
+                --points deduct for tdm
             else
                 local rightful_turn = roundv.shaman_turn
                 if pn ~= roundv.shamans[rightful_turn] then
@@ -1115,6 +1210,9 @@ function eventSummoningEnd(pn, type, xPos, yPos, angle, desc)
                     roundv.shaman_turn = rightful_turn == 1 and 2 or 1
                     UpdateTurnUI()
                 end
+                local sl = roundv.spawnlist[pn]
+                sl[sl._len+1] = desc.id
+                sl._len = sl._len + 1
             end
         end
     elseif roundv.lobby and type == 90 then
