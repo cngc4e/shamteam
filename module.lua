@@ -70,6 +70,7 @@ local IMG_FEATHER_DIVINE = "172e14b438a.png"-- divine feather 30px width
 local IMG_TOGGLE_ON = "172e5c315f1.png"
 local IMG_TOGGLE_OFF = "172e5c335e7.png"
 local IMG_LOBBY_BG = "172e68f8d24.png"
+local IMG_HELP = "172e72750d9.png"
 
 -- Others
 local staff = {["Cass11337#8417"]=true, ["Emeryaurora#0000"]=true, ["Pegasusflyer#0000"]=true, ["Tactcat#0000"]=true, ["Leafileaf#0000"]=true, ["Rini#5475"]=true, ["Rayallan#0000"]=true}
@@ -77,13 +78,13 @@ local dev = {["Cass11337#8417"]=true, ["Casserole#1798"]=true}
 local mods = {
     [MOD_TELEPATHY] = {"Telepathic Communication", 0.5, "Disables prespawn preview. You won't be able to see what and where your partner is trying to spawn."},
     [MOD_WORK_FAST] = {"We Work Fast!", 0.3, "Reduces building time limit by 60 seconds. For the quick hands."},
-    [MOD_BUTTER_FINGERS] = {"Butter Fingers", -0.5, "Allows you and your partner to undo the last spawned object up to two times."},
+    [MOD_BUTTER_FINGERS] = {"Butter Fingers", -0.5, "Allows you and your partner to undo your last spawned object by pressing U up to two times."},
     [MOD_SNAIL_NAIL] = {"Snail Nail", -0.5, "Increases building time limit by 30 seconds. More time for our nails to arrive."},
     _len = 4,
 }
 
 ----- Forward declarations (local)
-local keys, cmds, cmds_alias, callbacks, sWindow, setSpectate
+local keys, cmds, cmds_alias, callbacks, sWindow, getExpMult, setSpectate
 
 ----- GENERAL UTILS
 local function math_round(num, dp)
@@ -144,6 +145,20 @@ end
 local function pDisp(pn)
     -- TODO: check if the player has the same name as another existing player in the room.
     return pn and (pn:find('#') and pn:sub(1,-6)) or nil
+end
+
+local function expDisp(n, addColor)
+    if addColor == nil then addColor = true end
+    local sign, color = "", "<J>"
+    if n > 0 then
+        sign = "+"
+        color = "<VP>"
+    elseif n < 0 then
+        sign = "-"
+        color = "<R>"
+    end
+    if not addColor then color = "" end
+    return color..sign..math.abs(n*100).."%"
 end
 
 ----- LIBS / HELPERS
@@ -406,9 +421,11 @@ A full list of staff are available via the !staff command.
         },
         [WINDOW_LOBBY] = {
             open = function(pn, p_data, tab)
+                p_data.images = { main={}, help={}, toggle={} }
+
                 --ui.addTextArea(WINDOW_LOBBY+1,"",pn,75,40,650,340,1,0,.8,true)  -- the background
                 ui.addTextArea(WINDOW_LOBBY+2,"<p align='center'><font size='13'>You’ve been chosen to pair up for the next round!",pn,75,50,650,nil,1,0,1,true)
-                p_data.images[6000] = {tfm.exec.addImage(IMG_LOBBY_BG, ":"..WINDOW_LOBBY, 70, 40, pn)}
+                p_data.images.main[1] = {tfm.exec.addImage(IMG_LOBBY_BG, ":"..WINDOW_LOBBY, 70, 40, pn)}
 
                 -- shaman cards
                 --ui.addTextArea(WINDOW_LOBBY+3,"",pn,120,85,265,200,0xcdcdcd,0xbababa,.1,true)
@@ -417,12 +434,12 @@ A full list of staff are available via the !staff command.
                 ui.addTextArea(WINDOW_LOBBY+6,"<p align='center'><font size='13'><b>"..(pDisp(roundv.shamans[2]) or 'N/A'),pn,413,90,269,nil,1,0,1,true)
 
                 -- mode
-                p_data.images[6001] = {tfm.exec.addImage(IMG_FEATHER_HARD, ":"..WINDOW_LOBBY, 202, 120, pn)}
-                p_data.images[6002] = {tfm.exec.addImage(IMG_FEATHER_DIVINE, ":"..WINDOW_LOBBY, 272, 120, pn)}
+                p_data.images.main[2] = {tfm.exec.addImage(IMG_FEATHER_HARD, ":"..WINDOW_LOBBY, 202, 120, pn)}
+                p_data.images.main[3] = {tfm.exec.addImage(IMG_FEATHER_DIVINE, ":"..WINDOW_LOBBY, 272, 120, pn)}
 
                 -- difficulty
                 ui.addTextArea(WINDOW_LOBBY+7,"<p align='center'><font size='13'><b>Difficulty",pn,120,184,265,nil,1,0,.2,true)
-                ui.addTextArea(WINDOW_LOBBY+8,"<p align='center'><font size='13'>to",pn,242,240,30,nil,1,0,0,true)
+                ui.addTextArea(WINDOW_LOBBY+8,"<p align='center'><font size='13'>to",pn,240,240,30,nil,1,0,0,true)
                 ui.addTextArea(WINDOW_LOBBY+9,"<p align='center'><font size='13'><b>"..roundv.diff1,pn,190,240,20,nil,1,0,.2,true)
                 ui.addTextArea(WINDOW_LOBBY+10,"<p align='center'><font size='13'><b>"..roundv.diff2,pn,299,240,20,nil,1,0,.2,true)
                 ui.addTextArea(WINDOW_LOBBY+11,GUI_BTN.."<p align='center'><font size='17'><b><a href='event:diff!1&1'>&#x25B2;</a><br><a href='event:diff!1&-1'>&#x25BC;",pn,132,224,20,nil,1,0,0,true)
@@ -430,30 +447,41 @@ A full list of staff are available via the !staff command.
 
                 -- mods
                 local mods_str = {}
+                local mods_helplink_str = {}
                 local i = 1
                 for k, mod in cpairs(mods) do
-                    --ui.addTextArea(WINDOW_LOBBY+30+i, mods[i][1], pn,430,125+((i-1)*30),110,20,1,0,.2,true)
                     mods_str[#mods_str+1] = string.format("<a href='event:modtoggle!%s'>%s", k, mod[1])
                     local is_set = bit32.band(roundv.mods, k) ~= 0
                     local x, y = 640, 120+((i-1)*25)
-                    p_data.images[k] = {tfm.exec.addImage(is_set and IMG_TOGGLE_ON or IMG_TOGGLE_OFF, ":"..WINDOW_LOBBY, x, y, pn), x, y}
-                    ui.addTextArea(WINDOW_LOBBY+80+i,string.format("<a href='event:modtoggle!%s'><font size='15'> <br>", k),pn,x-2,y+3,35,18,1,0xfffff,0,true)
+                    p_data.images.toggle[k] = {tfm.exec.addImage(is_set and IMG_TOGGLE_ON or IMG_TOGGLE_OFF, ":"..WINDOW_LOBBY, x, y, pn), x, y}
+                    --ui.addTextArea(WINDOW_LOBBY+80+i,string.format("<a href='event:modtoggle!%s'><font size='15'> <br>", k),pn,x-2,y+3,35,18,1,0xfffff,0,true)
+                    
+                    x = 425
+                    y = 125+((i-1)*25)
+                    p_data.images.help[k] = {tfm.exec.addImage(IMG_HELP, ":"..WINDOW_LOBBY, x, y, pn), x, y}
+                    mods_helplink_str[#mods_helplink_str+1] = string.format("<a href='event:modhelp!%s'>", k)
+
                     i = i+1
                 end
-                ui.addTextArea(WINDOW_LOBBY+14, table.concat(mods_str, "\n\n").."\n", pn,430,125,200,nil,1,0,0,true)
+                ui.addTextArea(WINDOW_LOBBY+14, table.concat(mods_str, "\n\n").."\n", pn,450,125,223,nil,1,0,0,true)
+                ui.addTextArea(WINDOW_LOBBY+15, "<font size='11'>"..table.concat(mods_helplink_str, "\n\n").."\n", pn,422,123,23,nil,1,0,0,true)
+
+                -- help and xp multiplier text
+                ui.addTextArea(WINDOW_LOBBY+16,"<p align='center'><i><J>",pn,120,300,560,nil,1,0,0,true)
+                ui.addTextArea(WINDOW_LOBBY+17,"<p align='center'><font size='13'><N>Exp multiplier:<br><font size='15'>"..expDisp(getExpMult()),pn,330,333,140,nil,1,0,0,true)
 
                 -- ready
-                ui.addTextArea(WINDOW_LOBBY+15, GUI_BTN.."<font size='2'><br><font size='12'><p align='center'><a href='event:ready'>".."Ready".."</a>",pn,120,320,100,24,0x666666,0x676767,opacity,true)
+                ui.addTextArea(WINDOW_LOBBY+18, GUI_BTN.."<font size='2'><br><font size='12'><p align='center'><a href='event:ready'>".."&#9744; Ready".."</a>",pn,200,340,100,24,0x666666,0x676767,1,true)
+                ui.addTextArea(WINDOW_LOBBY+19, GUI_BTN.."<font size='2'><br><font size='12'><p align='center'><a href='event:ready'>".."&#9744; Ready".."</a>",pn,500,340,100,24,0x666666,0x676767,1,true)
             end,
             close = function(pn, p_data)
-                for i = 1, 15 do
+                for i = 1, 19 do
                     ui.removeTextArea(WINDOW_LOBBY+i)
                 end
-                for i = 81, 80+mods._len do
-                    ui.removeTextArea(WINDOW_LOBBY+i)
-                end
-                for type_id, img_dat in pairs(p_data.images) do
-                    tfm.exec.removeImage(img_dat[1], pn)
+                for _, imgs in pairs(p_data.images) do
+                    for k, img_dat in pairs(imgs) do
+                        tfm.exec.removeImage(img_dat[1], pn)
+                    end
                 end
                 p_data.images = {}
             end,
@@ -548,7 +576,7 @@ keys = {
                 sl[sl._len] = nil
                 sl._len = sl._len - 1
                 roundv.undo_count = roundv.undo_count + 1
-                tfm.exec.chatMessage(string.format("<ROSE>%s used an undo! (%s left)", pn, 2 - roundv.undo_count))
+                tfm.exec.chatMessage(string.format("<ROSE>%s used an undo! (%s left)", pDisp(pn), 2 - roundv.undo_count))
             end
         end,
         trigger = DOWN_ONLY
@@ -842,8 +870,19 @@ callbacks = {
     ready = function(pn)
         if not roundv.running or not roundv.lobby then return end
         if roundv.shamans[1] == pn then
-            rotate_evt.timesup()
+            local is_ready = not roundv.shaman_ready[1]
+            roundv.shaman_ready[1] = is_ready
+
+            local blt = is_ready and "&#9745;" or "&#9744;";
+            ui.updateTextArea(WINDOW_LOBBY+18, GUI_BTN.."<font size='2'><br><font size='12'><p align='center'><a href='event:ready'>"..blt.." Ready".."</a>")
         elseif roundv.shamans[2] == pn then
+            local is_ready = not roundv.shaman_ready[2]
+            roundv.shaman_ready[2] = is_ready
+
+            local blt = is_ready and "&#9745;" or "&#9744;";
+            ui.updateTextArea(WINDOW_LOBBY+19, GUI_BTN.."<font size='2'><br><font size='12'><p align='center'><a href='event:ready'>"..blt.." Ready".."</a>")
+        end
+        if roundv.shaman_ready[1] and roundv.shaman_ready[2] then
             rotate_evt.timesup()
         end
     end,
@@ -856,14 +895,38 @@ callbacks = {
         roundv.mods = bit32.bxor(roundv.mods, mod_id)  -- flip and toggle the flag
         local is_set = bit32.band(roundv.mods, mod_id) ~= 0
         for name in cpairs(pL.room) do
-            local img_dats = sWindow.getImages(WINDOW_LOBBY, name)
-            if img_dats[mod_id] then
+            local imgs = sWindow.getImages(WINDOW_LOBBY, name)
+            local img_dats = imgs.toggle
+            if img_dats and img_dats[mod_id] then
                 tfm.exec.removeImage(img_dats[mod_id][1])
                 img_dats[mod_id][1] = tfm.exec.addImage(is_set and IMG_TOGGLE_ON or IMG_TOGGLE_OFF, ":"..WINDOW_LOBBY, img_dats[mod_id][2], img_dats[mod_id][3])
             end
         end
+        ui.updateTextArea(WINDOW_LOBBY+17,"<p align='center'><font size='13'><N>Exp multiplier:<br><font size='15'>"..expDisp(getExpMult()))
+    end,
+    modhelp = function(pn, mod_id)
+        mod_id = tonumber(mod_id) or -1
+        local mod = mods[mod_id]
+        if mod then
+            ui.updateTextArea(WINDOW_LOBBY+16, string.format("<p align='center'><i><J>%s: %s %s of original exp.", mod[1], mod[3], expDisp(mod[2], false)),pn)
+        end
     end,
 }
+
+getExpMult = function()
+    local ret = 0
+    for k, mod in cpairs(mods) do
+        if bit32.band(roundv.mods, k) ~= 0 then
+            ret = ret + mod[2]
+        end
+    end
+    if ret > 0.7 then
+        ret = 0.7
+    elseif ret < -0.7 then
+        ret = -0.7
+    end
+    return ret
+end
 
 setSpectate = function(pn, b)
     if b and not pL.spectator[pn] then
@@ -1029,6 +1092,7 @@ function eventNewGame()
         roundv.diff1 = 1
         roundv.diff2 = 3
         roundv.mode = 'tdm'
+        roundv.shaman_ready = {}
         if new_game_vars.previous_round then
             -- show back the GUI for the previous round of shamans
             for i = 1, #new_game_vars.previous_round.shamans do
