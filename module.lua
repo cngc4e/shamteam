@@ -541,7 +541,7 @@ keys = {
     },
     [85] = {
         func = function(pn) -- u (undo spawn)
-            if not pL.shaman[pn] then return end
+            if not pL.shaman[pn] or bit32.band(roundv.mods, MOD_BUTTER_FINGERS) == 0 then return end
             local sl = roundv.spawnlist[pn]
             if sl._len > 0 and roundv.undo_count < 2 then
                 tfm.exec.removeObject(sl[sl._len])
@@ -1209,10 +1209,11 @@ function eventSummoningEnd(pn, type, xPos, yPos, angle, desc)
                     if #roundv.shamans ~= 2 then return end
                     roundv.shaman_turn = rightful_turn == 1 and 2 or 1
                     UpdateTurnUI()
+
+                    local sl = roundv.spawnlist[pn]
+                    sl[sl._len+1] = desc.id
+                    sl._len = sl._len + 1
                 end
-                local sl = roundv.spawnlist[pn]
-                sl[sl._len+1] = desc.id
-                sl._len = sl._len + 1
             end
         end
     elseif roundv.lobby and type == 90 then
