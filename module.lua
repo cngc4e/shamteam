@@ -943,7 +943,7 @@ callbacks = {
     options = function(pn, action)
         if action == 'close' then
             sWindow.close(WINDOW_OPTIONS, pn)
-        elseif sWindow.isOpened(WINDOW_OPTIONS, pn) then
+        elseif not sWindow.isOpened(WINDOW_OPTIONS, pn) then
             sWindow.open(WINDOW_OPTIONS, pn)
         end
     end,
