@@ -16,17 +16,6 @@ local pL = {
     spectator = { _len = 0 },
 }
 
--- TODO: temporary..
-local mapdb = {
-    tdm = {
-        {"1803400", "6684914", "3742299", "3630912"},
-        {"1852359", "6244577"},
-        {"294822", "6400012"},
-        {"5417400", "2611862", "3292713", "3587523", "6114320", "1287411", "5479449", "1289915"},
-        {"1236698", "3833268", "7294988", "6971076"}
-    }
-}
-
 ----- ENUMS / CONST DEFINES
 -- Permission levels
 local GROUP_GUEST = 1
@@ -73,11 +62,17 @@ local GUI_BTN = "<font color='#EDCC8D'>"
 -- Images
 local IMG_FEATHER_HARD = "172e1332b11.png" -- hard feather 30px width
 local IMG_FEATHER_DIVINE = "172e14b438a.png" -- divine feather 30px width
+local IMG_FEATHER_HARD_DISABLED = "172ed052b25.png"
+local IMG_FEATHER_DIVINE_DISABLED = "172ed050e45.png"
 local IMG_TOGGLE_ON = "172e5c315f1.png" -- 30px width
 local IMG_TOGGLE_OFF = "172e5c335e7.png" -- 30px width
 local IMG_LOBBY_BG = "172e68f8d24.png"
 local IMG_HELP = "172e72750d9.png" -- 18px width
 local IMG_OPTIONS_BG = "172eb766bdd.png" -- 240 x 325
+
+-- Modes
+local TSM_HARD = 1
+local TSM_DIV = 2
 
 -- Others
 local staff = {["Cass11337#8417"]=true, ["Emeryaurora#0000"]=true, ["Pegasusflyer#0000"]=true, ["Tactcat#0000"]=true, ["Leafileaf#0000"]=true, ["Rini#5475"]=true, ["Rayallan#0000"]=true}
@@ -97,6 +92,24 @@ local options = {
 
 local default_playerData = {
     toggles = 0,
+}
+
+-- TODO: temporary..
+local mapdb = {
+    [TSM_HARD] = {
+        {"1803400", "6684914", "3742299", "3630912"},
+        {"1852359", "6244577"},
+        {"294822", "6400012"},
+        {"5417400", "2611862", "3292713", "3587523", "6114320", "1287411", "5479449", "1289915"},
+        {"1236698", "3833268", "7294988", "6971076"}
+    },
+    [TSM_DIV] = {
+        {"1803400", "6684914", "3742299", "3630912"},
+        {"1852359", "6244577"},
+        {"294822", "6400012"},
+        {"5417400", "2611862", "3292713", "3587523", "6114320", "1287411", "5479449", "1289915"},
+        {"1236698", "3833268", "7294988", "6971076"}
+    }
 }
 
 -- Toggles enabled by default
@@ -220,6 +233,7 @@ do
             diff = math.random(roundv.diff1, roundv.diff2)  -- TODO: user-defined diff, and mode!
             map = mapdb[roundv.mode][diff][ math.random(1,#mapdb[roundv.mode][diff])]
         until not roundv.previousmap or tonumber(map) ~= roundv.previousmap
+        new_game_vars.mode = roundv.mode
         new_game_vars.difficulty = diff
         new_game_vars.mods = roundv.mods
 
@@ -442,7 +456,7 @@ A full list of staff are available via the !staff command.
         },
         [WINDOW_LOBBY] = {
             open = function(pn, p_data, tab)
-                p_data.images = { main={}, help={}, toggle={} }
+                p_data.images = { main={}, mode={}, help={}, toggle={} }
 
                 --ui.addTextArea(WINDOW_LOBBY+1,"",pn,75,40,650,340,1,0,.8,true)  -- the background
                 local header = pL.shaman[pn] and "You’ve been chosen to pair up for the next round!" or "Every second, 320 baguettes are eaten in France!"
@@ -456,16 +470,19 @@ A full list of staff are available via the !staff command.
                 ui.addTextArea(WINDOW_LOBBY+6,"<p align='center'><font size='13'><b>"..(pDisp(roundv.shamans[2]) or 'N/A'),pn,413,90,269,nil,1,0,1,true)
 
                 -- mode
-                p_data.images.main[2] = {tfm.exec.addImage(IMG_FEATHER_HARD, ":"..WINDOW_LOBBY, 202, 120, pn)}
-                p_data.images.main[3] = {tfm.exec.addImage(IMG_FEATHER_DIVINE, ":"..WINDOW_LOBBY, 272, 120, pn)}
+                p_data.images.mode[TSM_HARD] = {tfm.exec.addImage(roundv.mode == TSM_HARD and IMG_FEATHER_HARD or IMG_FEATHER_HARD_DISABLED, ":"..WINDOW_LOBBY, 202, 125, pn), 202, 125}
+                p_data.images.mode[TSM_DIV] = {tfm.exec.addImage(roundv.mode == TSM_DIV and IMG_FEATHER_DIVINE or IMG_FEATHER_DIVINE_DISABLED, ":"..WINDOW_LOBBY, 272, 125, pn), 272, 125}
+
+                ui.addTextArea(WINDOW_LOBBY+20, string.format("<a href='event:setmode!%s'><font size='35'>\n", TSM_HARD), pn, 202, 125, 35, 40, 1, 0, 0, true)
+                ui.addTextArea(WINDOW_LOBBY+21, string.format("<a href='event:setmode!%s'><font size='35'>\n", TSM_DIV), pn, 272, 125, 35, 40, 1, 0, 0, true)
 
                 -- difficulty
                 ui.addTextArea(WINDOW_LOBBY+7,"<p align='center'><font size='13'><b>Difficulty",pn,120,184,265,nil,1,0,.2,true)
                 ui.addTextArea(WINDOW_LOBBY+8,"<p align='center'><font size='13'>to",pn,240,240,30,nil,1,0,0,true)
                 ui.addTextArea(WINDOW_LOBBY+9,"<p align='center'><font size='13'><b>"..roundv.diff1,pn,190,240,20,nil,1,0,.2,true)
                 ui.addTextArea(WINDOW_LOBBY+10,"<p align='center'><font size='13'><b>"..roundv.diff2,pn,299,240,20,nil,1,0,.2,true)
-                ui.addTextArea(WINDOW_LOBBY+11,GUI_BTN.."<p align='center'><font size='17'><b><a href='event:diff!1&1'>&#x25B2;</a><br><a href='event:diff!1&-1'>&#x25BC;",pn,132,224,20,nil,1,0,0,true)
-                ui.addTextArea(WINDOW_LOBBY+12,GUI_BTN.."<p align='center'><font size='17'><b><a href='event:diff!2&1'>&#x25B2;</a><br><a href='event:diff!2&-1'>&#x25BC;",pn,350,224,20,nil,1,0,0,true)
+                ui.addTextArea(WINDOW_LOBBY+11,GUI_BTN.."<p align='center'><font size='17'><b><a href='event:setdiff!1&1'>&#x25B2;</a><br><a href='event:setdiff!1&-1'>&#x25BC;",pn,132,224,20,nil,1,0,0,true)
+                ui.addTextArea(WINDOW_LOBBY+12,GUI_BTN.."<p align='center'><font size='17'><b><a href='event:setdiff!2&1'>&#x25B2;</a><br><a href='event:setdiff!2&-1'>&#x25BC;",pn,350,224,20,nil,1,0,0,true)
 
                 -- mods
                 local mods_str = {}
@@ -493,11 +510,11 @@ A full list of staff are available via the !staff command.
                 ui.addTextArea(WINDOW_LOBBY+17,"<p align='center'><font size='13'><N>Exp multiplier:<br><font size='15'>"..expDisp(getExpMult()),pn,330,333,140,nil,1,0,0,true)
 
                 -- ready
-                ui.addTextArea(WINDOW_LOBBY+18, GUI_BTN.."<font size='2'><br><font size='12'><p align='center'><a href='event:ready'>".."&#9744; Ready".."</a>",pn,200,340,100,24,0x666666,0x676767,1,true)
-                ui.addTextArea(WINDOW_LOBBY+19, GUI_BTN.."<font size='2'><br><font size='12'><p align='center'><a href='event:ready'>".."&#9744; Ready".."</a>",pn,500,340,100,24,0x666666,0x676767,1,true)
+                ui.addTextArea(WINDOW_LOBBY+18, GUI_BTN.."<font size='2'><br><font size='12'><p align='center'><a href='event:setready'>".."&#9744; Ready".."</a>",pn,200,340,100,24,0x666666,0x676767,1,true)
+                ui.addTextArea(WINDOW_LOBBY+19, GUI_BTN.."<font size='2'><br><font size='12'><p align='center'><a href='event:setready'>".."&#9744; Ready".."</a>",pn,500,340,100,24,0x666666,0x676767,1,true)
             end,
             close = function(pn, p_data)
-                for i = 1, 19 do
+                for i = 1, 21 do
                     ui.removeTextArea(WINDOW_LOBBY+i, pn)
                 end
                 for _, imgs in pairs(p_data.images) do
@@ -681,10 +698,18 @@ cmds = {
                 local buildstring = {false}
                 for i = 3, #argv do
                     arg = argv[i]
-                    if arg=='true' then args[args._len+1]=true
-                    elseif arg=='false' then args[args._len+1]=false
-                    elseif arg=='nil' then args[args._len+1]=nil
-                    elseif tonumber(arg) ~= nil then args[args._len+1]=tonumber(arg)
+                    if arg=='true' then
+                        args[args._len+1]=true
+                        args._len = args._len+1
+                    elseif arg=='false' then
+                        args[args._len+1]=false
+                        args._len = args._len+1
+                    elseif arg=='nil' then
+                        args[args._len+1]=nil
+                        args._len = args._len+1
+                    elseif tonumber(arg) ~= nil then
+                        args[args._len+1]=tonumber(arg)
+                        args._len = args._len+1
                     elseif arg:find('{(.-)}') then
                         local params = {}
                         for _,p in pairs(string_split(arg:match('{(.-)}'), ',')) do
@@ -698,20 +723,23 @@ cmds = {
                             params[attr] = val
                         end
                         args[args._len+1] = params
+                        args._len = args._len+1
                     elseif arg:find('^"(.*)"$') then
                         args[args._len+1] = arg:match('^"(.*)"$'):gsub('&lt;', '<'):gsub('&gt;', '>'):gsub('&amp;', '&')
+                        args._len = args._len+1
                     elseif arg:find('^"(.*)') then
                         buildstring[1] = true
                         buildstring[2] = arg:match('^"(.*)'):gsub('&lt;', '<'):gsub('&gt;', '>'):gsub('&amp;', '&')
                     elseif arg:find('(.*)"$') then
                         buildstring[1] = false
                         args[args._len+1] = buildstring[2] .. " " .. arg:match('(.*)"$'):gsub('&lt;', '<'):gsub('&gt;', '>'):gsub('&amp;', '&')
+                        args._len = args._len+1
                     elseif buildstring[1] then
                         buildstring[2] = buildstring[2] .. " " .. arg:gsub('&lt;', '<'):gsub('&gt;', '>'):gsub('&amp;', '&')
                     else
                         args[args._len+1] = arg
+                        args._len = args._len+1
                     end
-                    args._len = args._len+1
                 end
                 stem[argv[2]](table.unpack(args, 1, args._len))
             else
@@ -915,7 +943,7 @@ callbacks = {
     options = function(pn, action)
         if action == 'close' then
             sWindow.close(WINDOW_OPTIONS, pn)
-        else
+        elseif sWindow.isOpened(WINDOW_OPTIONS, pn) then
             sWindow.open(WINDOW_OPTIONS, pn)
         end
     end,
@@ -933,7 +961,31 @@ callbacks = {
             tfm.exec.chatMessage(links[link_id], pn)
         end
     end,
-    diff = function(pn, id, add)
+    setmode = function(pn, mode_id)
+        mode_id = tonumber(mode_id) or -1
+        if not roundv.running or not roundv.lobby or (mode_id ~= TSM_HARD and mode_id ~= TSM_DIV)
+                or pn ~= roundv.shamans[1] then -- only shaman #1 gets to set mode
+            return
+        end
+        roundv.mode = mode_id
+
+        for name in cpairs(pL.room) do
+            local imgs = sWindow.getImages(WINDOW_LOBBY, name)
+            local img_dats = imgs.mode
+            if img_dats and img_dats[mode_id] then
+                tfm.exec.removeImage(img_dats[TSM_HARD][1])
+                tfm.exec.removeImage(img_dats[TSM_DIV][1])
+                if mode_id == TSM_HARD then
+                    img_dats[TSM_HARD][1] = tfm.exec.addImage(IMG_FEATHER_HARD, ":"..WINDOW_LOBBY, img_dats[TSM_HARD][2], img_dats[TSM_HARD][3], name)
+                    img_dats[TSM_DIV][1] = tfm.exec.addImage(IMG_FEATHER_DIVINE_DISABLED, ":"..WINDOW_LOBBY, img_dats[TSM_DIV][2], img_dats[TSM_DIV][3], name)
+                else
+                    img_dats[TSM_HARD][1] = tfm.exec.addImage(IMG_FEATHER_HARD_DISABLED, ":"..WINDOW_LOBBY, img_dats[TSM_HARD][2], img_dats[TSM_HARD][3], name)
+                    img_dats[TSM_DIV][1] = tfm.exec.addImage(IMG_FEATHER_DIVINE, ":"..WINDOW_LOBBY, img_dats[TSM_DIV][2], img_dats[TSM_DIV][3], name)
+                end
+            end
+        end
+    end,
+    setdiff = function(pn, id, add)
         id = tonumber(id) or 0
         add = tonumber(add) or 0
         if not roundv.running or not roundv.lobby 
@@ -956,20 +1008,20 @@ callbacks = {
         ui.updateTextArea(WINDOW_LOBBY+9,"<p align='center'><font size='13'><b>"..roundv.diff1)
         ui.updateTextArea(WINDOW_LOBBY+10,"<p align='center'><font size='13'><b>"..roundv.diff2)
     end,
-    ready = function(pn)
+    setready = function(pn)
         if not roundv.running or not roundv.lobby then return end
         if roundv.shamans[1] == pn then
             local is_ready = not roundv.shaman_ready[1]
             roundv.shaman_ready[1] = is_ready
 
             local blt = is_ready and "&#9745;" or "&#9744;";
-            ui.updateTextArea(WINDOW_LOBBY+18, GUI_BTN.."<font size='2'><br><font size='12'><p align='center'><a href='event:ready'>"..blt.." Ready".."</a>")
+            ui.updateTextArea(WINDOW_LOBBY+18, GUI_BTN.."<font size='2'><br><font size='12'><p align='center'><a href='event:setready'>"..blt.." Ready".."</a>")
         elseif roundv.shamans[2] == pn then
             local is_ready = not roundv.shaman_ready[2]
             roundv.shaman_ready[2] = is_ready
 
             local blt = is_ready and "&#9745;" or "&#9744;";
-            ui.updateTextArea(WINDOW_LOBBY+19, GUI_BTN.."<font size='2'><br><font size='12'><p align='center'><a href='event:ready'>"..blt.." Ready".."</a>")
+            ui.updateTextArea(WINDOW_LOBBY+19, GUI_BTN.."<font size='2'><br><font size='12'><p align='center'><a href='event:setready'>"..blt.." Ready".."</a>")
         end
         if roundv.shaman_ready[1] and roundv.shaman_ready[2] then
             rotate_evt.timesup()
@@ -1187,6 +1239,7 @@ function eventNewGame()
         phase = 0,
         lobby = new_game_vars.lobby,
         start_epoch = os.time(),
+        mode = new_game_vars.mode or TSM_DIV,
         mods = new_game_vars.mods or 0,
     }
 
@@ -1215,7 +1268,6 @@ function eventNewGame()
     if roundv.lobby then
         roundv.diff1 = 1
         roundv.diff2 = 3
-        roundv.mode = 'tdm'
         roundv.shaman_ready = {}
         if new_game_vars.previous_round then
             -- show back the GUI for the previous round of shamans
@@ -1246,9 +1298,8 @@ function eventNewGame()
             sWindow.close(WINDOW_GUI, name)
             
             -- Set mode there and back; this teleports both shamans to the first spawnpoint
-            -- TODO: flip order for THM
-            tfm.exec.setShamanMode(name, 1)
-            tfm.exec.setShamanMode(name, 2)
+            tfm.exec.setShamanMode(name, 0)
+            tfm.exec.setShamanMode(name, roundv.mode == TSM_HARD and 1 or 2)
 
         end
 
@@ -1261,12 +1312,19 @@ function eventNewGame()
             tfm.exec.chatMessage("<R>Ξ No shaman pair!")
         end
         UpdateTurnUI()
-        ui.setMapName("<VI>[TDM] <ROSE>Difficulty "..roundv.difficulty.." - <VP>@"..roundv.mapinfo.code)
+
+        local t_mode = {
+            [TSM_HARD]={"J", "THM"},
+            [TSM_DIV]={"VI", "TDM"}
+        }
+        local mode_disp = t_mode[roundv.mode]
+        assert(mode_disp ~= nil, "Invalid TSM mode!!")
+        ui.setMapName(string.format("<%s>[%s] <ROSE>Difficulty %s - <VP>@%s", mode_disp[1], mode_disp[2], roundv.difficulty, roundv.mapinfo.code))
         
         tfm.exec.disableMortCommand(false)
         tfm.exec.disablePrespawnPreview(bit32.band(roundv.mods, MOD_TELEPATHY) ~= 0)
 
-        local time_limit = 180  -- TODO: 200 for THM
+        local time_limit = roundv.mode == TSM_HARD and 200 or 180
         if bit32.band(roundv.mods, MOD_WORK_FAST) ~= 0 then
             time_limit = time_limit - 60
         end
