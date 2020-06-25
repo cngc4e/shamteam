@@ -243,7 +243,7 @@ do
                     highest[2] = name
                 end
             end
-            tfm.exec.chatMessage("[dbg] int score "..name..": "..players[name].internal_score)
+            print("[dbg] int score "..name..": "..players[name].internal_score)
         end
 
         tfm.exec.setPlayerScore(highest[2], 100)
@@ -498,11 +498,11 @@ A full list of staff are available via the !staff command.
             end,
             close = function(pn, p_data)
                 for i = 1, 19 do
-                    ui.removeTextArea(WINDOW_LOBBY+i)
+                    ui.removeTextArea(WINDOW_LOBBY+i, pn)
                 end
                 for _, imgs in pairs(p_data.images) do
                     for k, img_dat in pairs(imgs) do
-                        tfm.exec.removeImage(img_dat[1], pn)
+                        tfm.exec.removeImage(img_dat[1])
                     end
                 end
                 p_data.images = {}
@@ -539,11 +539,11 @@ A full list of staff are available via the !staff command.
             end,
             close = function(pn, p_data)
                 for i = 1, 5 do
-                    ui.removeTextArea(WINDOW_OPTIONS+i)
+                    ui.removeTextArea(WINDOW_OPTIONS+i, pn)
                 end
                 for _, imgs in pairs(p_data.images) do
                     for k, img_dat in pairs(imgs) do
-                        tfm.exec.removeImage(img_dat[1], pn)
+                        tfm.exec.removeImage(img_dat[1])
                     end
                 end
                 p_data.images = {}
@@ -988,7 +988,7 @@ callbacks = {
             local img_dats = imgs.toggle
             if img_dats and img_dats[mod_id] then
                 tfm.exec.removeImage(img_dats[mod_id][1])
-                img_dats[mod_id][1] = tfm.exec.addImage(is_set and IMG_TOGGLE_ON or IMG_TOGGLE_OFF, ":"..WINDOW_LOBBY, img_dats[mod_id][2], img_dats[mod_id][3])
+                img_dats[mod_id][1] = tfm.exec.addImage(is_set and IMG_TOGGLE_ON or IMG_TOGGLE_OFF, ":"..WINDOW_LOBBY, img_dats[mod_id][2], img_dats[mod_id][3], name)
             end
         end
         ui.updateTextArea(WINDOW_LOBBY+17,"<p align='center'><font size='13'><N>Exp multiplier:<br><font size='15'>"..expDisp(getExpMult()))
@@ -1008,13 +1008,12 @@ callbacks = {
         playerData[pn].toggles = bit32.bxor(playerData[pn].toggles, opt_id)  -- flip and toggle the flag
         
         local is_set = bit32.band(playerData[pn].toggles, opt_id) ~= 0
-        for name in cpairs(pL.room) do
-            local imgs = sWindow.getImages(WINDOW_OPTIONS, name)
-            local img_dats = imgs.toggle
-            if img_dats and img_dats[opt_id] then
-                tfm.exec.removeImage(img_dats[opt_id][1])
-                img_dats[opt_id][1] = tfm.exec.addImage(is_set and IMG_TOGGLE_ON or IMG_TOGGLE_OFF, ":"..WINDOW_OPTIONS, img_dats[opt_id][2], img_dats[opt_id][3])
-            end
+
+        local imgs = sWindow.getImages(WINDOW_OPTIONS, pn)
+        local img_dats = imgs.toggle
+        if img_dats and img_dats[opt_id] then
+            tfm.exec.removeImage(img_dats[opt_id][1])
+            img_dats[opt_id][1] = tfm.exec.addImage(is_set and IMG_TOGGLE_ON or IMG_TOGGLE_OFF, ":"..WINDOW_OPTIONS, img_dats[opt_id][2], img_dats[opt_id][3], pn)
         end
 
         -- hide/show GUI on toggle
