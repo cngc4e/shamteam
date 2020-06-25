@@ -1,5 +1,6 @@
 local translations = {}
-local players = {}  -- module specific player data
+local players = {}  -- module room player data
+local playerData = {}  -- module persistent player data
 local roundv = {}  -- data spanning the lifetime of the round
 local new_game_vars = {}  -- data spanning the lifetime till the next eventNewGame
 local module_started = false
@@ -43,7 +44,7 @@ local DOWN_ONLY = 3
 local WINDOW_GUI = bit32.lshift(0, 7)
 local WINDOW_HELP = bit32.lshift(1, 7)
 local WINDOW_LOBBY = bit32.lshift(2, 7)
-local WINDOW_SETTINGS = bit32.lshift(3, 7)
+local WINDOW_OPTIONS = bit32.lshift(3, 7)
 
 -- TextAreas
 local TA_SPECTATING = 9000
@@ -53,6 +54,11 @@ local MOD_TELEPATHY = bit32.lshift(1, 0)
 local MOD_WORK_FAST = bit32.lshift(1, 1)
 local MOD_BUTTER_FINGERS = bit32.lshift(1, 2)
 local MOD_SNAIL_NAIL = bit32.lshift(1, 3)
+
+-- OPTIONS FLAGS
+local OPT_ANTILAG = bit32.lshift(1, 0)
+local OPT_GUI = bit32.lshift(1, 1)
+local OPT_LANGUAGE = bit32.lshift(1, 2)
 
 -- Link IDs
 local LINK_DISCORD = 1
@@ -66,22 +72,35 @@ local GUI_BTN = "<font color='#EDCC8D'>"
 
 -- Images
 local IMG_FEATHER_HARD = "172e1332b11.png" -- hard feather 30px width
-local IMG_FEATHER_DIVINE = "172e14b438a.png"-- divine feather 30px width
-local IMG_TOGGLE_ON = "172e5c315f1.png"
-local IMG_TOGGLE_OFF = "172e5c335e7.png"
+local IMG_FEATHER_DIVINE = "172e14b438a.png" -- divine feather 30px width
+local IMG_TOGGLE_ON = "172e5c315f1.png" -- 30px width
+local IMG_TOGGLE_OFF = "172e5c335e7.png" -- 30px width
 local IMG_LOBBY_BG = "172e68f8d24.png"
-local IMG_HELP = "172e72750d9.png"
+local IMG_HELP = "172e72750d9.png" -- 18px width
+local IMG_OPTIONS_BG = "172eb766bdd.png" -- 240 x 325
 
 -- Others
 local staff = {["Cass11337#8417"]=true, ["Emeryaurora#0000"]=true, ["Pegasusflyer#0000"]=true, ["Tactcat#0000"]=true, ["Leafileaf#0000"]=true, ["Rini#5475"]=true, ["Rayallan#0000"]=true}
 local dev = {["Cass11337#8417"]=true, ["Casserole#1798"]=true}
+
 local mods = {
     [MOD_TELEPATHY] = {"Telepathic Communication", 0.5, "Disables prespawn preview. You won't be able to see what and where your partner is trying to spawn."},
     [MOD_WORK_FAST] = {"We Work Fast!", 0.3, "Reduces building time limit by 60 seconds. For the quick hands."},
     [MOD_BUTTER_FINGERS] = {"Butter Fingers", -0.5, "Allows you and your partner to undo your last spawned object by pressing U up to two times."},
     [MOD_SNAIL_NAIL] = {"Snail Nail", -0.5, "Increases building time limit by 30 seconds. More time for our nails to arrive."},
-    _len = 4,
 }
+
+local options = {
+    [OPT_ANTILAG] = {"AntiLag", "Attempt to minimise impacts on buildings caused by delayed anchor spawning during high latency."},
+    [OPT_GUI] = {"Show GUI", "Whether to show or hide the help menu, player settings and profile buttons on-screen."},
+}
+
+local default_playerData = {
+    toggles = 0,
+}
+
+-- Toggles enabled by default
+default_playerData.toggles = bit32.bor(default_playerData.toggles, OPT_GUI)
 
 ----- Forward declarations (local)
 local keys, cmds, cmds_alias, callbacks, sWindow, getExpMult, setSpectate
@@ -235,10 +254,12 @@ do
         end
 
         -- pass statistics and info on the previous round
-        new_game_vars.previous_round = {
-            mapcode = roundv.mapinfo and roundv.mapinfo.code or nil,
-            shamans = {pL.shaman[1], pL.shaman[2]},
-        }
+        if roundv.running then
+            new_game_vars.previous_round = {
+                mapcode = roundv.mapinfo and roundv.mapinfo.code or nil,
+                shamans = table_copy(roundv.shamans),
+            }
+        end
         new_game_vars.lobby = true
         map_sched.load(7740307)
     end
@@ -255,7 +276,7 @@ do
         elseif allnonshamdead then
             if type=='won' then tfm.exec.setGameTime(20) end
             if roundv.mapinfo.Opportunist then
-                for _,name in pairs(roundv.shaman) do
+                for name in cpairs(pL.shaman) do
                     tfm.exec.giveCheese(name)
                     tfm.exec.playerVictory(name)
                 end
@@ -319,7 +340,7 @@ do
     local windows = {
         [WINDOW_GUI] = {
             open = function(pn, p_data, tab)
-                local T = {{"event:help!Welcome","?"},{"event:playersets","P"},{"event:roomsets","O"}}
+                local T = {{"event:help!Welcome","?"},{"event:options","O"},{"event:profile","P"}}
                 local x, y = 800-(30*(#T+1)), 25
                 for i,m in ipairs(T) do
                     ui.addTextArea(WINDOW_GUI+i,"<p align='center'><a href='"..m[1].."'>"..m[2], pn, x+(i*30), y, 20, 0, 1, 0, .7, true)
@@ -424,7 +445,8 @@ A full list of staff are available via the !staff command.
                 p_data.images = { main={}, help={}, toggle={} }
 
                 --ui.addTextArea(WINDOW_LOBBY+1,"",pn,75,40,650,340,1,0,.8,true)  -- the background
-                ui.addTextArea(WINDOW_LOBBY+2,"<p align='center'><font size='13'>You’ve been chosen to pair up for the next round!",pn,75,50,650,nil,1,0,1,true)
+                local header = pL.shaman[pn] and "You’ve been chosen to pair up for the next round!" or "Every second, 320 baguettes are eaten in France!"
+                ui.addTextArea(WINDOW_LOBBY+2,"<p align='center'><font size='13'>"..header,pn,75,50,650,nil,1,0,1,true)
                 p_data.images.main[1] = {tfm.exec.addImage(IMG_LOBBY_BG, ":"..WINDOW_LOBBY, 70, 40, pn)}
 
                 -- shaman cards
@@ -449,7 +471,7 @@ A full list of staff are available via the !staff command.
                 local mods_str = {}
                 local mods_helplink_str = {}
                 local i = 1
-                for k, mod in cpairs(mods) do
+                for k, mod in pairs(mods) do
                     mods_str[#mods_str+1] = string.format("<a href='event:modtoggle!%s'>%s", k, mod[1])
                     local is_set = bit32.band(roundv.mods, k) ~= 0
                     local x, y = 640, 120+((i-1)*25)
@@ -486,6 +508,47 @@ A full list of staff are available via the !staff command.
                 p_data.images = {}
             end,
             type = INDEPENDENT,
+            players = {}
+        },
+        [WINDOW_OPTIONS] = {
+            open = function(pn, p_data, tab)
+                p_data.images = { main={}, toggle={}, help={} }
+
+                p_data.images.main[1] = {tfm.exec.addImage(IMG_OPTIONS_BG, ":"..WINDOW_OPTIONS, 520, 47, pn)}
+                ui.addTextArea(WINDOW_OPTIONS+1, "<font size='3'><br><p align='center'><font size='13'><J><b>Settings", pn, 588,52, 102,30, 1, 0, 0, true)
+                ui.addTextArea(WINDOW_OPTIONS+2, "<a href='event:options!close'><font size='30'>\n", pn, 716,48, 31,31, 1, 0, 0, true)
+
+                local opts_str = {}
+                local opts_helplink_str = {}
+                local i = 1
+                for k, opt in pairs(options) do
+                    opts_str[#opts_str+1] = string.format("<a href='event:opttoggle!%s'>%s", k, opt[1])
+                    local is_set = bit32.band(playerData[pn].toggles, k) ~= 0
+                    local x, y = 716, 100+((i-1)*25)
+                    p_data.images.toggle[k] = {tfm.exec.addImage(is_set and IMG_TOGGLE_ON or IMG_TOGGLE_OFF, ":"..WINDOW_OPTIONS, x, y, pn), x, y}
+                    
+                    x = 540
+                    y = 105+((i-1)*25)
+                    p_data.images.help[k] = {tfm.exec.addImage(IMG_HELP, ":"..WINDOW_OPTIONS, x, y, pn), x, y}
+                    opts_helplink_str[#opts_helplink_str+1] = string.format("<a href='event:opthelp!%s'>", k)
+
+                    i = i+1
+                end
+                ui.addTextArea(WINDOW_OPTIONS+3, table.concat(opts_str, "\n\n").."\n", pn,560,105,223,nil,1,0,0,true)
+                ui.addTextArea(WINDOW_OPTIONS+4, "<font size='11'>"..table.concat(opts_helplink_str, "\n\n").."\n", pn,540,103,23,nil,1,0,0,true)
+            end,
+            close = function(pn, p_data)
+                for i = 1, 5 do
+                    ui.removeTextArea(WINDOW_OPTIONS+i)
+                end
+                for _, imgs in pairs(p_data.images) do
+                    for k, img_dat in pairs(imgs) do
+                        tfm.exec.removeImage(img_dat[1], pn)
+                    end
+                end
+                p_data.images = {}
+            end,
+            type = MUTUALLY_EXCLUSIVE,
             players = {}
         },
     }
@@ -547,7 +610,7 @@ end
 keys = {
     [71] = {
         func = function(pn, enable) -- g (display GUI for shamans)
-            if pL.shaman[pn] then
+            if not roundv.lobby and pL.shaman[pn] then
                 if enable then
                     sWindow.open(WINDOW_GUI, pn)
                 else
@@ -563,6 +626,16 @@ keys = {
                 sWindow.close(WINDOW_HELP, pn)
             else
                 sWindow.open(WINDOW_HELP, pn)
+            end
+        end,
+        trigger = DOWN_ONLY
+    },
+    [79] = {
+        func = function(pn) -- o (display player options)
+            if sWindow.isOpened(WINDOW_OPTIONS, pn) then
+                sWindow.close(WINDOW_OPTIONS, pn)
+            else
+                sWindow.open(WINDOW_OPTIONS, pn)
             end
         end,
         trigger = DOWN_ONLY
@@ -595,17 +668,23 @@ cmds = {
         perms = GROUP_STAFF
     },
     exec = {
-        func = function(pn, m)
+        func = function(pn, m, w1)
             local argv = string_split(m, '%s')
-            if argv[2] and tfm.exec[argv[2]]~=nil then
-                local args = {}
+            local stem = tfm.exec
+            if w1 == "ui" then
+                stem = ui
+            elseif w1 == "system" then
+                stem = system
+            end
+            if argv[2] and stem[argv[2]]~=nil then
+                local args = {_len=0}
                 local buildstring = {false}
                 for i = 3, #argv do
                     arg = argv[i]
-                    if arg=='true' then args[#args+1]=true
-                    elseif arg=='false' then args[#args+1]=false
-                    elseif arg=='nil' then args[#args+1]=nil
-                    elseif tonumber(arg) ~= nil then args[#args+1]=tonumber(arg)
+                    if arg=='true' then args[args._len+1]=true
+                    elseif arg=='false' then args[args._len+1]=false
+                    elseif arg=='nil' then args[args._len+1]=nil
+                    elseif tonumber(arg) ~= nil then args[args._len+1]=tonumber(arg)
                     elseif arg:find('{(.-)}') then
                         local params = {}
                         for _,p in pairs(string_split(arg:match('{(.-)}'), ',')) do
@@ -618,24 +697,25 @@ cmds = {
                             end
                             params[attr] = val
                         end
-                        args[#args+1] = params
+                        args[args._len+1] = params
                     elseif arg:find('^"(.*)"$') then
-                        args[#args+1] = arg:match('^"(.*)"$'):gsub('&lt;', '<'):gsub('&gt;', '>'):gsub('&amp;', '&')
+                        args[args._len+1] = arg:match('^"(.*)"$'):gsub('&lt;', '<'):gsub('&gt;', '>'):gsub('&amp;', '&')
                     elseif arg:find('^"(.*)') then
                         buildstring[1] = true
                         buildstring[2] = arg:match('^"(.*)'):gsub('&lt;', '<'):gsub('&gt;', '>'):gsub('&amp;', '&')
                     elseif arg:find('(.*)"$') then
                         buildstring[1] = false
-                        args[#args+1] = buildstring[2] .. " " .. arg:match('(.*)"$'):gsub('&lt;', '<'):gsub('&gt;', '>'):gsub('&amp;', '&')
+                        args[args._len+1] = buildstring[2] .. " " .. arg:match('(.*)"$'):gsub('&lt;', '<'):gsub('&gt;', '>'):gsub('&amp;', '&')
                     elseif buildstring[1] then
                         buildstring[2] = buildstring[2] .. " " .. arg:gsub('&lt;', '<'):gsub('&gt;', '>'):gsub('&amp;', '&')
                     else
-                        args[#args+1] = arg
+                        args[args._len+1] = arg
                     end
+                    args._len = args._len+1
                 end
-                tfm.exec[argv[2]](table.unpack(args))
+                stem[argv[2]](table.unpack(args, 1, args._len))
             else
-                MSG('no such exec '..(argv[2] and argv[2] or 'nil'), pn)
+                tfm.exec.chatMessage('<R>no such exec '..(argv[2] and argv[2] or 'nil'), pn)
             end
         end,
         perms = GROUP_DEV
@@ -818,6 +898,8 @@ cmds_alias = {
     m = "mort",
     afk = "spectate",
     unafk = "spectate",
+    ui = "exec",
+    system = "exec",
 }
 
 -- WARNING: It is possible for players to alter callback strings, ensure
@@ -828,6 +910,13 @@ callbacks = {
             sWindow.close(WINDOW_HELP, pn)
         else
             sWindow.open(WINDOW_HELP, pn, tab)
+        end
+    end,
+    options = function(pn, action)
+        if action == 'close' then
+            sWindow.close(WINDOW_OPTIONS, pn)
+        else
+            sWindow.open(WINDOW_OPTIONS, pn)
         end
     end,
     unafk = function(pn)
@@ -911,11 +1000,47 @@ callbacks = {
             ui.updateTextArea(WINDOW_LOBBY+16, string.format("<p align='center'><i><J>%s: %s %s of original exp.", mod[1], mod[3], expDisp(mod[2], false)),pn)
         end
     end,
+    opttoggle = function(pn, opt_id)
+        opt_id = tonumber(opt_id)
+        if not opt_id or not options[opt_id] or not roundv.running then
+            return
+        end
+        playerData[pn].toggles = bit32.bxor(playerData[pn].toggles, opt_id)  -- flip and toggle the flag
+        
+        local is_set = bit32.band(playerData[pn].toggles, opt_id) ~= 0
+        for name in cpairs(pL.room) do
+            local imgs = sWindow.getImages(WINDOW_OPTIONS, name)
+            local img_dats = imgs.toggle
+            if img_dats and img_dats[opt_id] then
+                tfm.exec.removeImage(img_dats[opt_id][1])
+                img_dats[opt_id][1] = tfm.exec.addImage(is_set and IMG_TOGGLE_ON or IMG_TOGGLE_OFF, ":"..WINDOW_OPTIONS, img_dats[opt_id][2], img_dats[opt_id][3])
+            end
+        end
+
+        -- hide/show GUI on toggle
+        if opt_id == OPT_GUI then
+            if not pL.shaman[pn] or roundv.lobby then
+                if is_set then
+                    sWindow.open(WINDOW_GUI, pn)
+                else
+                    sWindow.close(WINDOW_GUI, pn)
+                end
+            end
+        end
+    end,
+    opthelp = function(pn, opt_id)
+        opt_id = tonumber(opt_id) or -1
+        local opt = options[opt_id]
+        if opt then
+            tfm.exec.chatMessage("<J>"..opt[1]..": "..opt[2], pn)
+        end
+    end,
+
 }
 
 getExpMult = function()
     local ret = 0
-    for k, mod in cpairs(mods) do
+    for k, mod in pairs(mods) do
         if bit32.band(roundv.mods, k) ~= 0 then
             ret = ret + mod[2]
         end
@@ -961,7 +1086,7 @@ end
 
 local ShowMods = function(pn)
     local m = { _len = 0 }
-    for k, mod in cpairs(mods) do
+    for k, mod in pairs(mods) do
         if bit32.band(roundv.mods, k) ~= 0 then
             m[m._len+1] = mod[1]
             m._len = m._len+1
@@ -1096,7 +1221,10 @@ function eventNewGame()
         if new_game_vars.previous_round then
             -- show back the GUI for the previous round of shamans
             for i = 1, #new_game_vars.previous_round.shamans do
-                sWindow.open(WINDOW_GUI, new_game_vars.previous_round.shamans[i])
+                local name = new_game_vars.previous_round.shamans[i]
+                if bit32.band(playerData[name].toggles, OPT_GUI) ~= 0 then
+                    sWindow.open(WINDOW_GUI, name)
+                end
             end
             roundv.previousmap = new_game_vars.previous_round.mapcode
         end
@@ -1164,6 +1292,7 @@ function eventNewPlayer(pn)
         group = GROUP_PLAYER,
         internal_score = 0,
     }
+    playerData[pn] = table_copy(default_playerData)  -- temp until database done
     if translations[p.community] then
         players[pn].lang = p.community
     end
@@ -1202,7 +1331,12 @@ function eventNewPlayer(pn)
     tfm.exec.setPlayerScore(pn, 0)
     tfm.exec.setShamanMode(pn, 2)  -- Force divine for TDM
 
-    sWindow.open(WINDOW_GUI, pn)
+    if bit32.band(playerData[pn].toggles, OPT_GUI) ~= 0 then
+        sWindow.open(WINDOW_GUI, pn)
+    end
+    if roundv.lobby then
+        sWindow.open(WINDOW_LOBBY, pn)
+    end
 
     if load_lobby then 
         rotate_evt.lobby()
@@ -1257,7 +1391,7 @@ function eventSummoningEnd(pn, type, xPos, yPos, angle, desc)
     end
     if roundv.startsummon then  -- workaround b/2: map prespawned object triggers summoning end event
         -- AntiLag™ by Leafileaf
-        if players[pn].sets.antilag and desc.baseType ~= 17 and desc.baseType ~= 32 then
+        if bit32.band(playerData[pn].toggles, OPT_ANTILAG) ~= 0 and desc.baseType ~= 17 and desc.baseType ~= 32 then
             tfm.exec.moveObject(desc.id, xPos, yPos, false, 0, 0, false, angle, false)
         end
         if not roundv.lobby then
@@ -1284,9 +1418,11 @@ function eventSummoningEnd(pn, type, xPos, yPos, angle, desc)
         -- ping detector
         if pL.shaman[pn] and ping then
             if ping >= ANTILAG_FORCE_THRESHOLD then
+                -- enable antilag
                 tfm.exec.chatMessage("<ROSE>Hey there, you appear to be really laggy. We have enabled AntiLag for you.", pn)
-                --players[pn].sets.antilag = true
-            elseif ping >= ANTILAG_WARN_THRESHOLD and not players[pn].sets.antilag then
+                playerData[pn].toggles = bit32.bor(playerData[pn].toggles, OPT_ANTILAG)
+            elseif ping >= ANTILAG_WARN_THRESHOLD and bit32.band(playerData[pn].toggles, OPT_ANTILAG) == 0 then
+                -- enable antilag if it isn't already so
                 tfm.exec.chatMessage("<ROSE>Hey there, you appear to have lagged. You should consider enabling AntiLag via the options menu (press O).", pn)
             end
         end
