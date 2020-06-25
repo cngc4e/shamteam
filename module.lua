@@ -581,8 +581,8 @@ A full list of staff are available via the !staff command.
                 sWindow.close(window_id, name)
             end
         elseif sWindow.isOpened(window_id, pn) then
-            windows[window_id].players[pn].is_open = false
             windows[window_id].close(pn, windows[window_id].players[pn])
+            windows[window_id].players[pn].is_open = false
         end
     end
 
@@ -1326,7 +1326,7 @@ function eventNewPlayer(pn)
     pL.dead[pn] = true
     pL.dead._len = pL.dead._len + 1
 
-    tfm.exec.chatMessage("\t<VP>Ξ Welcome to <b>Team Shaman (TSM)</b> v0.1 Alpha! Ξ\n<J>TSM is a building module where dual shamans take turns to spawn objects.\nPress H for more information.\n<R>NOTE: <VP>For development purposes this module will only run Team Divine Mode tentatively. As the module starts picking up shape, Team Hard Mode will be available.", pn)
+    tfm.exec.chatMessage("\t<VP>Ξ Welcome to <b>Team Shaman (TSM)</b> v0.4 Alpha! Ξ\n<J>TSM is a building module where dual shamans take turns to spawn objects.\nPress H for more information.\n<R>NOTE: <VP>For development purposes this module will only run Team Divine Mode tentatively. As the module starts picking up shape, Team Hard Mode will be available.", pn)
 
     tfm.exec.setPlayerScore(pn, 0)
     tfm.exec.setShamanMode(pn, 2)  -- Force divine for TDM
