@@ -47,7 +47,8 @@ local MOD_SNAIL_NAIL = bit32.lshift(1, 3)
 -- OPTIONS FLAGS
 local OPT_ANTILAG = bit32.lshift(1, 0)
 local OPT_GUI = bit32.lshift(1, 1)
-local OPT_LANGUAGE = bit32.lshift(1, 2)
+local OPT_CIRCLE = bit32.lshift(1, 2)
+local OPT_LANGUAGE = bit32.lshift(1, 3)
 
 -- Link IDs
 local LINK_DISCORD = 1
@@ -69,10 +70,14 @@ local IMG_TOGGLE_OFF = "172e5c335e7.png" -- 30px width
 local IMG_LOBBY_BG = "172e68f8d24.png"
 local IMG_HELP = "172e72750d9.png" -- 18px width
 local IMG_OPTIONS_BG = "172eb766bdd.png" -- 240 x 325
+local IMG_RANGE_CIRCLE = "172ef5c1de4.png" -- 240 x 240
 
 -- Modes
 local TSM_HARD = 1
 local TSM_DIV = 2
+
+-- Room
+local DEFAULT_MAX_PLAYERS = 50
 
 -- Others
 local staff = {["Cass11337#8417"]=true, ["Emeryaurora#0000"]=true, ["Pegasusflyer#0000"]=true, ["Tactcat#0000"]=true, ["Leafileaf#0000"]=true, ["Rini#5475"]=true, ["Rayallan#0000"]=true}
@@ -88,11 +93,16 @@ local mods = {
 local options = {
     [OPT_ANTILAG] = {"AntiLag", "Attempt to minimise impacts on buildings caused by delayed anchor spawning during high latency."},
     [OPT_GUI] = {"Show GUI", "Whether to show or hide the help menu, player settings and profile buttons on-screen."},
+    [OPT_CIRCLE] = {"Show partner's range", "Toggles an orange circle that shows the spawning range of your partner in Team Hard Mode."},
 }
 
 local default_playerData = {
     toggles = 0,
 }
+
+-- Toggles enabled by default
+default_playerData.toggles = bit32.bor(default_playerData.toggles, OPT_GUI)
+default_playerData.toggles = bit32.bor(default_playerData.toggles, OPT_CIRCLE)
 
 -- TODO: temporary..
 local mapdb = {
@@ -112,11 +122,8 @@ local mapdb = {
     }
 }
 
--- Toggles enabled by default
-default_playerData.toggles = bit32.bor(default_playerData.toggles, OPT_GUI)
-
 ----- Forward declarations (local)
-local keys, cmds, cmds_alias, callbacks, sWindow, getExpMult, setSpectate
+local keys, cmds, cmds_alias, callbacks, sWindow, getExpMult, setSpectate, UpdateCircle
 
 ----- GENERAL UTILS
 local function math_round(num, dp)
@@ -179,6 +186,11 @@ local function pDisp(pn)
     return pn and (pn:find('#') and pn:sub(1,-6)) or nil
 end
 
+local function pythag(x1, y1, x2, y2, r)
+	local x,y,r = x2-x1, y2-y1, r+r
+	return x*x+y*y<r*r
+end
+
 local function expDisp(n, addColor)
     if addColor == nil then addColor = true end
     local sign, color = "", "<J>"
@@ -229,11 +241,20 @@ local rotate_evt
 do
     local function rotate()
         local diff,map
-        repeat
-            diff = math.random(roundv.diff1, roundv.diff2)  -- TODO: user-defined diff, and mode!
-            map = mapdb[roundv.mode][diff][ math.random(1,#mapdb[roundv.mode][diff])]
-        until not roundv.previousmap or tonumber(map) ~= roundv.previousmap
-        new_game_vars.mode = roundv.mode
+        if roundv.custommap then
+            diff = 0
+            map = roundv.custommap[1]
+        else
+            repeat
+                diff = math.random(roundv.diff1, roundv.diff2)
+                map = mapdb[roundv.mode][diff][ math.random(1,#mapdb[roundv.mode][diff])]
+            until not roundv.previousmap or tonumber(map) ~= roundv.previousmap
+        end
+        if roundv.custommap and roundv.custommap[2] then
+            new_game_vars.mode = roundv.custommap[2]
+        else
+            new_game_vars.mode = roundv.mode
+        end
         new_game_vars.difficulty = diff
         new_game_vars.mods = roundv.mods
 
@@ -260,11 +281,16 @@ do
             print("[dbg] int score "..name..": "..players[name].internal_score)
         end
 
-        tfm.exec.setPlayerScore(highest[2], 100)
-        if players[highest[2]] and players[highest[2]].pair then
-            tfm.exec.setPlayerScore(players[highest[2]].pair, 100)
-        elseif second_highest then
-            tfm.exec.setPlayerScore(second_highest, 100) -- TODO: prioritise the pre-defined pair or soulmate
+        if roundv.customshams then
+            tfm.exec.setPlayerScore(roundv.customshams[1], 100)
+            tfm.exec.setPlayerScore(roundv.customshams[2], 100)
+        else
+            tfm.exec.setPlayerScore(highest[2], 100)
+            if players[highest[2]] and players[highest[2]].pair then
+                tfm.exec.setPlayerScore(players[highest[2]].pair, 100)
+            elseif second_highest then
+                tfm.exec.setPlayerScore(second_highest, 100) -- TODO: prioritise the pre-defined pair or soulmate
+            end
         end
 
         -- pass statistics and info on the previous round
@@ -275,6 +301,7 @@ do
             }
         end
         new_game_vars.lobby = true
+        new_game_vars.custommap = roundv.custommap
         map_sched.load(7740307)
     end
     
@@ -347,6 +374,7 @@ do
 
     local help_ta_range = {
         ['Welcome'] = {WINDOW_HELP+21, WINDOW_HELP+22},
+        ['Rules'] = {WINDOW_HELP+31, WINDOW_HELP+32},
         ['Commands'] = {WINDOW_HELP+41, WINDOW_HELP+42},
         ['Contributors'] = {WINDOW_HELP+51, WINDOW_HELP+52},
     }
@@ -405,6 +433,12 @@ Join our discord server for help and more information!
 Link: %s<a href="event:link!%s">discord.gg/YkzM4rh</a>
                     ]], GUI_BTN, LINK_DISCORD)
                     ui.addTextArea(WINDOW_HELP+21,text,pn,88,95,625,nil,0,0,0,true)
+                elseif tab == "Rules" then
+                    local text = [[
+<p align="center"><J><font size='14'><b>Rules</b></font></p>
+<p align="left"><font size='12'><N>- In hard mode, you must be within your partner's spawning range for a successful spawn.
+                    ]]
+                    ui.addTextArea(WINDOW_HELP+31,text,pn,88,95,625,nil,0,0,0,true)
                 elseif tab == "Commands" then
                     local text = [[
 <p align="center"><J><font size='14'><b>Commands</b></font></p>
@@ -756,9 +790,28 @@ cmds = {
         end,
         perms = GROUP_PLAYER
     },
-    np = {
-        func = function(pn, m, w1, w2)
-            map_sched.load(w2)
+    npp = {
+        func = function(pn, m, w1, w2, w3)
+            local modes = {['thm']=TSM_HARD, ['tdm']=TSM_DIV}
+            if w3 and not modes[w3] then
+                tfm.exec.chatMessage("<R>error: invalid mode (thm,tdm)", pn)
+                return
+            end
+            roundv.custommap = {w2, modes[w3]}
+            tfm.exec.chatMessage("Map "..w2.." will be loaded the next round.", pn)
+        end,
+        perms = GROUP_STAFF
+    },
+    ch = {
+        func = function(pn, m, w1, w2, w3)
+            local s1, s2 = pFind(w2, pn), pFind(w3, pn)
+            if not s1 or not s2 then return
+            elseif roundv.lobby then
+                tfm.exec.chatMessage("You may only use !ch outside of the lobby.", pn)
+                return
+            end
+            roundv.customshams = {s1, s2}
+            tfm.exec.chatMessage(s1.." & "..s2.." will be the shamans the next round.", pn)
         end,
         perms = GROUP_STAFF
     },
@@ -766,7 +819,7 @@ cmds = {
         func = function(pn, m, w1, w2, w3)
             local num = tonumber(w2) or tonumber(w3) or 0
             local target = pFind(w1) or pFind(w2) or pn
-            if num<0 or num>999 then MSG("score (0-999)",pn,'R')
+            if num<0 or num>999 then tfm.exex.chatMessage("<R>error: score (0-999)",pn)
             elseif w2=='all' or w3=='all' then
                 for name in pairs(tfm.get.room.playerList) do tfm.exec.setPlayerScore(name, num) end
             elseif w2 =='me' or w3=='me' then
@@ -919,7 +972,29 @@ cmds = {
             end
         end,
         perms = GROUP_DEV
-    }
+    },
+    roomlimit = {
+        func = function(pn, m, w1, w2)
+            local limit = tonumber(w2)
+            if not w2 then
+                tfm.exec.setRoomMaxPlayers(DEFAULT_MAX_PLAYERS)
+                tfm.exec.chatMessage("Room limit reset.", pn)
+            elseif limit then
+                tfm.exec.setRoomMaxPlayers(limit)
+                tfm.exec.chatMessage("Room limit set to "..limit..".", pn)
+            else
+                tfm.exec.chatMessage("<R>error: number", pn)
+            end
+        end,
+        perms = GROUP_STAFF
+    },
+    time = {
+        func = function(pn, m, w1, w2)
+            local limit = tonumber(w2)
+            tfm.exec.setGameTime(limit)
+        end,
+        perms = GROUP_STAFF
+    },
 }
 
 cmds_alias = {
@@ -928,6 +1003,7 @@ cmds_alias = {
     unafk = "spectate",
     ui = "exec",
     system = "exec",
+    lock = "roomlimit",
 }
 
 -- WARNING: It is possible for players to alter callback strings, ensure
@@ -1078,6 +1154,12 @@ callbacks = {
                 end
             end
         end
+
+        if opt_id == OPT_CIRCLE then
+            if pn == roundv.shamans[roundv.shaman_turn==1 and 2 or 1] then
+                UpdateCircle()
+            end
+        end
     end,
     opthelp = function(pn, opt_id)
         opt_id = tonumber(opt_id) or -1
@@ -1170,6 +1252,24 @@ local UpdateTurnUI = function()
     local color = "CH"
     local shaman = roundv.shamans[roundv.shaman_turn]
     ui.setShamanName(string.format("<%s>%s's <J>Turn", color, pDisp(shaman)))
+end
+
+UpdateCircle = function()
+    if roundv.mode == TSM_HARD then
+        local display_to = roundv.shamans[roundv.shaman_turn == 1 and 2 or 1]
+        local display_for = roundv.shamans[roundv.shaman_turn]
+        if not display_to then return end
+        
+        if roundv.circle then
+            tfm.exec.removeImage(roundv.circle)
+        end
+        if bit32.band(playerData[display_to].toggles, OPT_CIRCLE) ~= 0 then
+            roundv.circle = tfm.exec.addImage(IMG_RANGE_CIRCLE, "$"..display_for, -120, -120, display_to)
+        else
+            tfm.exec.removeImage(roundv.circle)
+            roundv.circle = nil
+        end
+    end
 end
 
 ----- EVENTS
@@ -1277,6 +1377,7 @@ function eventNewGame()
                     sWindow.open(WINDOW_GUI, name)
                 end
             end
+            roundv.custommap = new_game_vars.custommap
             roundv.previousmap = new_game_vars.previous_round.mapcode
         end
         sWindow.open(WINDOW_LOBBY, nil)
@@ -1286,6 +1387,7 @@ function eventNewGame()
         else
             tfm.exec.chatMessage("<R>Ξ No shaman pair!")
         end
+        tfm.exec.disableAfkDeath(true)
         tfm.exec.disableMortCommand(true)
         tfm.exec.disablePrespawnPreview(false)
     else
@@ -1297,8 +1399,7 @@ function eventNewGame()
             -- hide the GUI for shamans
             sWindow.close(WINDOW_GUI, name)
             
-            -- Set mode there and back; this teleports both shamans to the first spawnpoint
-            tfm.exec.setShamanMode(name, 0)
+            -- Force the mode; this also teleports both shamans to the blue's spawnpoint
             tfm.exec.setShamanMode(name, roundv.mode == TSM_HARD and 1 or 2)
 
         end
@@ -1312,6 +1413,7 @@ function eventNewGame()
             tfm.exec.chatMessage("<R>Ξ No shaman pair!")
         end
         UpdateTurnUI()
+        UpdateCircle()
 
         local t_mode = {
             [TSM_HARD]={"J", "THM"},
@@ -1321,6 +1423,7 @@ function eventNewGame()
         assert(mode_disp ~= nil, "Invalid TSM mode!!")
         ui.setMapName(string.format("<%s>[%s] <ROSE>Difficulty %s - <VP>@%s", mode_disp[1], mode_disp[2], roundv.difficulty, roundv.mapinfo.code))
         
+        tfm.exec.disableAfkDeath(false)
         tfm.exec.disableMortCommand(false)
         tfm.exec.disablePrespawnPreview(bit32.band(roundv.mods, MOD_TELEPATHY) ~= 0)
 
@@ -1383,10 +1486,9 @@ function eventNewPlayer(pn)
     pL.dead[pn] = true
     pL.dead._len = pL.dead._len + 1
 
-    tfm.exec.chatMessage("\t<VP>Ξ Welcome to <b>Team Shaman (TSM)</b> v0.4 Alpha! Ξ\n<J>TSM is a building module where dual shamans take turns to spawn objects.\nPress H for more information.\n<R>NOTE: <VP>For development purposes this module will only run Team Divine Mode tentatively. As the module starts picking up shape, Team Hard Mode will be available.", pn)
+    tfm.exec.chatMessage("\t<VP>Ξ Welcome to <b>Team Shaman (TSM)</b> v0.5 Alpha! Ξ\n<J>TSM is a building module where dual shamans take turns to spawn objects.\nPress H for more information.\n<R>NOTE: <VP>Module is in early stages of development and may see incomplete or broken features.", pn)
 
     tfm.exec.setPlayerScore(pn, 0)
-    tfm.exec.setShamanMode(pn, 2)  -- Force divine for TDM
 
     if bit32.band(playerData[pn].toggles, OPT_GUI) ~= 0 then
         sWindow.open(WINDOW_GUI, pn)
@@ -1439,6 +1541,12 @@ end
 
 function eventSummoningStart(pn, type, xPos, yPos, angle)
     roundv.startsummon = true  -- workaround b/2
+    if type == 44 then  -- totems are banned; TODO: need more aggressive ban since this can be bypassed with (forced) lag
+        local player = tfm.get.room.playerList[pn]
+		local x, y = player.x, player.y
+        tfm.exec.setShamanMode(pn, roundv.mode == TSM_HARD and 1 or 2)
+		tfm.exec.movePlayer(pn, x, y, false, 0, 0, false)
+	end
 end
 
 function eventSummoningEnd(pn, type, xPos, yPos, angle, desc)
@@ -1462,12 +1570,21 @@ function eventSummoningEnd(pn, type, xPos, yPos, angle, desc)
                     --points deduct
                 else
                     if #roundv.shamans ~= 2 then return end
-                    roundv.shaman_turn = rightful_turn == 1 and 2 or 1
-                    UpdateTurnUI()
+                    local s1, s2 = tfm.get.room.playerList[roundv.shamans[1]], tfm.get.room.playerList[roundv.shamans[2]]
+                    if roundv.mode ~= TSM_HARD or pythag(s1.x, s1.y, s2.x, s2.y, 60) then  -- TODO: lowerSyncDelay for more accurate position
+                        roundv.shaman_turn = rightful_turn == 1 and 2 or 1
+                        UpdateTurnUI()
+                        UpdateCircle()
 
-                    local sl = roundv.spawnlist[pn]
-                    sl[sl._len+1] = desc.id
-                    sl._len = sl._len + 1
+                        local sl = roundv.spawnlist[pn]
+                        sl[sl._len+1] = desc.id
+                        sl._len = sl._len + 1
+                    else
+                        local other = rightful_turn == 1 and 2 or 1
+                        tfm.exec.removeObject(desc.id)
+                        tfm.exec.chatMessage("<J>Ξ Your partner needs to be within your spawning range.", pn)
+                        tfm.exec.chatMessage("<J>Ξ You need to be within your partner's spawning range.", roundv.shamans[other])
+                    end
                 end
             end
         end
@@ -1502,11 +1619,13 @@ end
 
 local init = function()
     print("Module is starting...")
-    for _,v in ipairs({'AfkDeath','AllShamanSkills','AutoNewGame','AutoScore','AutoTimeLeft','PhysicalConsumables'}) do
+    for _,v in ipairs({'AllShamanSkills','AutoNewGame','AutoScore','AutoTimeLeft','PhysicalConsumables'}) do
         tfm.exec['disable'..v](true)
     end
     system.disableChatCommandDisplay(nil,true)
     for name in pairs(tfm.get.room.playerList) do eventNewPlayer(name) end
+    tfm.exec.setRoomMaxPlayers(DEFAULT_MAX_PLAYERS)
+    tfm.exec.setRoomPassword("")
     rotate_evt.lobby()
 end
 
