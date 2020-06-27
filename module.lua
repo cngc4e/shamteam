@@ -5,6 +5,15 @@ local roundv = {}  -- data spanning the lifetime of the round
 local new_game_vars = {}  -- data spanning the lifetime till the next eventNewGame
 local module_started = false
 
+-- Cached variable lookups (or rather in the fancy name of "spare my brains & hands lol")
+local room = tfm.get.room
+local band = bit32.band     -- x & Y
+local bor = bit32.bor       -- x | y
+local bnot = bit32.bnot     -- ~x
+local bxor = bit32.bxor     -- x ^ y
+local lshift = bit32.lshift -- x << y
+local rshift = bit32.rshift -- x >> y
+
 -- Keeps an accurate list of players and their states by rely on asynchronous events to update
 -- This works around playerList issues which are caused by it relying on sync and can be slow to update
 local pL = {
@@ -30,25 +39,30 @@ local UP_ONLY = 2
 local DOWN_ONLY = 3
 
 -- Windows
-local WINDOW_GUI = bit32.lshift(0, 7)
-local WINDOW_HELP = bit32.lshift(1, 7)
-local WINDOW_LOBBY = bit32.lshift(2, 7)
-local WINDOW_OPTIONS = bit32.lshift(3, 7)
+local WINDOW_GUI = lshift(0, 7)
+local WINDOW_HELP = lshift(1, 7)
+local WINDOW_LOBBY = lshift(2, 7)
+local WINDOW_OPTIONS = lshift(3, 7)
 
 -- TextAreas
 local TA_SPECTATING = 9000
 
 -- MOD FLAGS
-local MOD_TELEPATHY = bit32.lshift(1, 0)
-local MOD_WORK_FAST = bit32.lshift(1, 1)
-local MOD_BUTTER_FINGERS = bit32.lshift(1, 2)
-local MOD_SNAIL_NAIL = bit32.lshift(1, 3)
+local MOD_TELEPATHY = lshift(1, 0)
+local MOD_WORK_FAST = lshift(1, 1)
+local MOD_BUTTER_FINGERS = lshift(1, 2)
+local MOD_SNAIL_NAIL = lshift(1, 3)
 
 -- OPTIONS FLAGS
-local OPT_ANTILAG = bit32.lshift(1, 0)
-local OPT_GUI = bit32.lshift(1, 1)
-local OPT_CIRCLE = bit32.lshift(1, 2)
-local OPT_LANGUAGE = bit32.lshift(1, 3)
+local OPT_ANTILAG = lshift(1, 0)
+local OPT_GUI = lshift(1, 1)
+local OPT_CIRCLE = lshift(1, 2)
+local OPT_LANGUAGE = lshift(1, 3)
+
+-- Map properties flags
+local MP_PORTALS = lshift(1, 0)
+local MP_OPPORTUNIST = lshift(1, 1)
+local MP_NOBALLOON = lshift(1, 2)
 
 -- Link IDs
 local LINK_DISCORD = 1
@@ -101,8 +115,8 @@ local default_playerData = {
 }
 
 -- Toggles enabled by default
-default_playerData.toggles = bit32.bor(default_playerData.toggles, OPT_GUI)
-default_playerData.toggles = bit32.bor(default_playerData.toggles, OPT_CIRCLE)
+default_playerData.toggles = bor(default_playerData.toggles, OPT_GUI)
+default_playerData.toggles = bor(default_playerData.toggles, OPT_CIRCLE)
 
 -- TODO: temporary..
 local mapdb = {
@@ -123,7 +137,7 @@ local mapdb = {
 }
 
 ----- Forward declarations (local)
-local keys, cmds, cmds_alias, callbacks, sWindow, getExpMult, setSpectate, UpdateCircle
+local keys, cmds, cmds_alias, callbacks, sWindow, GetExpMult, SetSpectate, UpdateCircle
 
 ----- GENERAL UTILS
 local function math_round(num, dp)
@@ -175,7 +189,7 @@ end
 
 local function pFind(target, pn)
     local ign = string.lower(target or ' ')
-    for name in pairs(tfm.get.room.playerList) do
+    for name in pairs(room.playerList) do
         if string.lower(name):find(ign) then return name end
     end
     if pn then tfm.exec.chatMessage("<R>error: no such target", pn) end
@@ -316,7 +330,7 @@ do
             lobby()
         elseif allnonshamdead then
             if type=='won' then tfm.exec.setGameTime(20) end
-            if roundv.mapinfo.Opportunist then
+            if band(roundv.mapinfo.flags, MP_OPPORTUNIST) ~= 0 then
                 for name in cpairs(pL.shaman) do
                     tfm.exec.giveCheese(name)
                     tfm.exec.playerVictory(name)
@@ -437,6 +451,9 @@ Link: %s<a href="event:link!%s">discord.gg/YkzM4rh</a>
                     local text = [[
 <p align="center"><J><font size='14'><b>Rules</b></font></p>
 <p align="left"><font size='12'><N>- In hard mode, you must be within your partner's spawning range for a successful spawn.
+- In divine mode, using arrows deduct points.
+- Only up to 3 solid balloons may be used.
+- Spawning an object while it is not your turn will result in points deduction.
                     ]]
                     ui.addTextArea(WINDOW_HELP+31,text,pn,88,95,625,nil,0,0,0,true)
                 elseif tab == "Commands" then
@@ -524,7 +541,7 @@ A full list of staff are available via the !staff command.
                 local i = 1
                 for k, mod in pairs(mods) do
                     mods_str[#mods_str+1] = string.format("<a href='event:modtoggle!%s'>%s", k, mod[1])
-                    local is_set = bit32.band(roundv.mods, k) ~= 0
+                    local is_set = band(roundv.mods, k) ~= 0
                     local x, y = 640, 120+((i-1)*25)
                     p_data.images.toggle[k] = {tfm.exec.addImage(is_set and IMG_TOGGLE_ON or IMG_TOGGLE_OFF, ":"..WINDOW_LOBBY, x, y, pn), x, y}
                     --ui.addTextArea(WINDOW_LOBBY+80+i,string.format("<a href='event:modtoggle!%s'><font size='15'> <br>", k),pn,x-2,y+3,35,18,1,0xfffff,0,true)
@@ -541,7 +558,7 @@ A full list of staff are available via the !staff command.
 
                 -- help and xp multiplier text
                 ui.addTextArea(WINDOW_LOBBY+16,"<p align='center'><i><J>",pn,120,300,560,nil,1,0,0,true)
-                ui.addTextArea(WINDOW_LOBBY+17,"<p align='center'><font size='13'><N>Exp multiplier:<br><font size='15'>"..expDisp(getExpMult()),pn,330,333,140,nil,1,0,0,true)
+                ui.addTextArea(WINDOW_LOBBY+17,"<p align='center'><font size='13'><N>Exp multiplier:<br><font size='15'>"..expDisp(GetExpMult()),pn,330,333,140,nil,1,0,0,true)
 
                 -- ready
                 ui.addTextArea(WINDOW_LOBBY+18, GUI_BTN.."<font size='2'><br><font size='12'><p align='center'><a href='event:setready'>".."&#9744; Ready".."</a>",pn,200,340,100,24,0x666666,0x676767,1,true)
@@ -574,7 +591,7 @@ A full list of staff are available via the !staff command.
                 local i = 1
                 for k, opt in pairs(options) do
                     opts_str[#opts_str+1] = string.format("<a href='event:opttoggle!%s'>%s", k, opt[1])
-                    local is_set = bit32.band(playerData[pn].toggles, k) ~= 0
+                    local is_set = band(playerData[pn].toggles, k) ~= 0
                     local x, y = 716, 100+((i-1)*25)
                     p_data.images.toggle[k] = {tfm.exec.addImage(is_set and IMG_TOGGLE_ON or IMG_TOGGLE_OFF, ":"..WINDOW_OPTIONS, x, y, pn), x, y}
                     
@@ -608,7 +625,7 @@ A full list of staff are available via the !staff command.
         if not windows[window_id] then
             return
         elseif not pn then
-            for name in pairs(tfm.get.room.playerList) do
+            for name in pairs(room.playerList) do
                 sWindow.open(window_id, name, table.unpack(arg))
             end
             return
@@ -628,7 +645,7 @@ A full list of staff are available via the !staff command.
 
     sWindow.close = function(window_id, pn)
         if not pn then
-            for name in pairs(tfm.get.room.playerList) do
+            for name in pairs(room.playerList) do
                 sWindow.close(window_id, name)
             end
         elseif sWindow.isOpened(window_id, pn) then
@@ -693,7 +710,7 @@ keys = {
     },
     [85] = {
         func = function(pn) -- u (undo spawn)
-            if not pL.shaman[pn] or bit32.band(roundv.mods, MOD_BUTTER_FINGERS) == 0 then return end
+            if not pL.shaman[pn] or band(roundv.mods, MOD_BUTTER_FINGERS) == 0 then return end
             local sl = roundv.spawnlist[pn]
             if sl._len > 0 and roundv.undo_count < 2 then
                 tfm.exec.removeObject(sl[sl._len])
@@ -821,7 +838,7 @@ cmds = {
             local target = pFind(w1) or pFind(w2) or pn
             if num<0 or num>999 then tfm.exex.chatMessage("<R>error: score (0-999)",pn)
             elseif w2=='all' or w3=='all' then
-                for name in pairs(tfm.get.room.playerList) do tfm.exec.setPlayerScore(name, num) end
+                for name in pairs(room.playerList) do tfm.exec.setPlayerScore(name, num) end
             elseif w2 =='me' or w3=='me' then
                 tfm.exec.setPlayerScore(pn, num) 
             else
@@ -950,10 +967,10 @@ cmds = {
             if target then
                 if w1 == "unafk" then
                     if other and pL.spectator[target] then
-                        setSpectate(target, false)
+                        SetSpectate(target, false)
                     end
                 elseif not pL.spectator[target] and not pL.shaman[target] then
-                    setSpectate(target, true)
+                    SetSpectate(target, true)
                     if other then
                         tfm.exec.chatMessage(string.format("<J>Ξ %s has been marked afk!", target))
                     end
@@ -1024,7 +1041,7 @@ callbacks = {
         end
     end,
     unafk = function(pn)
-        setSpectate(pn, false)
+        SetSpectate(pn, false)
         tfm.exec.chatMessage("<ROSE>Welcome back! We've been expecting you.", pn)
     end,
     link = function(pn, link_id)
@@ -1109,8 +1126,8 @@ callbacks = {
                 or pn ~= roundv.shamans[2] then -- only shaman #2 gets to choose mods
             return
         end
-        roundv.mods = bit32.bxor(roundv.mods, mod_id)  -- flip and toggle the flag
-        local is_set = bit32.band(roundv.mods, mod_id) ~= 0
+        roundv.mods = bxor(roundv.mods, mod_id)  -- flip and toggle the flag
+        local is_set = band(roundv.mods, mod_id) ~= 0
         for name in cpairs(pL.room) do
             local imgs = sWindow.getImages(WINDOW_LOBBY, name)
             local img_dats = imgs.toggle
@@ -1119,7 +1136,7 @@ callbacks = {
                 img_dats[mod_id][1] = tfm.exec.addImage(is_set and IMG_TOGGLE_ON or IMG_TOGGLE_OFF, ":"..WINDOW_LOBBY, img_dats[mod_id][2], img_dats[mod_id][3], name)
             end
         end
-        ui.updateTextArea(WINDOW_LOBBY+17,"<p align='center'><font size='13'><N>Exp multiplier:<br><font size='15'>"..expDisp(getExpMult()))
+        ui.updateTextArea(WINDOW_LOBBY+17,"<p align='center'><font size='13'><N>Exp multiplier:<br><font size='15'>"..expDisp(GetExpMult()))
     end,
     modhelp = function(pn, mod_id)
         mod_id = tonumber(mod_id) or -1
@@ -1133,9 +1150,9 @@ callbacks = {
         if not opt_id or not options[opt_id] or not roundv.running then
             return
         end
-        playerData[pn].toggles = bit32.bxor(playerData[pn].toggles, opt_id)  -- flip and toggle the flag
+        playerData[pn].toggles = bxor(playerData[pn].toggles, opt_id)  -- flip and toggle the flag
         
-        local is_set = bit32.band(playerData[pn].toggles, opt_id) ~= 0
+        local is_set = band(playerData[pn].toggles, opt_id) ~= 0
 
         local imgs = sWindow.getImages(WINDOW_OPTIONS, pn)
         local img_dats = imgs.toggle
@@ -1171,10 +1188,10 @@ callbacks = {
 
 }
 
-getExpMult = function()
+GetExpMult = function()
     local ret = 0
     for k, mod in pairs(mods) do
-        if bit32.band(roundv.mods, k) ~= 0 then
+        if band(roundv.mods, k) ~= 0 then
             ret = ret + mod[2]
         end
     end
@@ -1186,7 +1203,7 @@ getExpMult = function()
     return ret
 end
 
-setSpectate = function(pn, b)
+SetSpectate = function(pn, b)
     if b and not pL.spectator[pn] then
         pL.spectator[pn] = true
         pL.spectator._len = pL.spectator._len + 1
@@ -1204,46 +1221,66 @@ setSpectate = function(pn, b)
 end
 
 local ShowMapInfo = function(pn)
-    local sT, tags = roundv.mapinfo, {}
-    if sT.Portals then tags[#tags+1] = "Portals" end
-    if sT.No_Balloon then tags[#tags+1] = "No Balloon" end
-    if sT.Opportunist then tags[#tags+1] = "Opportunist" end
-    if sT.No_B then tags[#tags+1] = "No-B" end
-    local strT = {string.format("<ROSE>[Map Info]<J> @%s <N>by <VP>%s%s", sT.code, sT.author, sT.mirrored and ' (mirrored)' or ''),
-        string.format("<VP>Wind: <J>%s <VP>| Gravity: <J>%s <VP>| MGOC: <J>%s",sT.Wind or '0',sT.Gravity or '10', sT.MGOC or '100', sT.Portals and '<VP>' or '<R>')}
-    if #tags > 0 then
-        strT[#strT+1] = string.format("Tags: %s", table.concat(tags, ", "))
-    end
-    tfm.exec.chatMessage("<N>"..table.concat(strT, "\n"),pn)
-end
+    local mp = roundv.mapinfo
+    local has_portals = band(mp.flags, MP_PORTALS) ~= 0
+    local strT = {
+        string.format("<ROSE>[Map Info]<J> @%s <N>by <VP>%s%s", mp.code, mp.original_author or mp.author, mp.mirrored and ' (mirrored)' or ''),
+        string.format("<VP>Wind: <J>%s <VP>| Gravity: <J>%s <VP>| MGOC: <J>%s",mp.Wind or '0',mp.Gravity or '10', mp.MGOC or '100', has_portals and '<VP>' or '<R>')
+    }
 
-local ShowMods = function(pn)
+    local tags_tbl = {
+        {MP_PORTALS, "Portals"},
+        {MP_NOBALLOON, "No Balloon"},
+        {MP_OPPORTUNIST, "Opportunist"}
+    }
+    local tags = { _len = 0 }
+    for i = 1, #tags_tbl do
+        local t = tags_tbl[i]
+        if band(mp.flags, t[1]) ~= 0 then
+            tags[tags._len+1] = t[2]
+            tags._len = tags._len+1
+        end
+    end
+    if tags._len > 0 then
+        strT[#strT+1] = "<ROSE>Tags: <N>"..table.concat(tags, ", ")
+    end
+    
     local m = { _len = 0 }
     for k, mod in pairs(mods) do
-        if bit32.band(roundv.mods, k) ~= 0 then
+        if band(roundv.mods, k) ~= 0 then
             m[m._len+1] = mod[1]
             m._len = m._len+1
         end
     end
-    tfm.exec.chatMessage("<J>Mods: <N>"..table.concat(m, ", "), pn)
+    if m._len > 0 then
+        strT[#strT+1] = "<ROSE>Mods: <N>"..table.concat(m, ", ")
+    end
+
+    tfm.exec.chatMessage("<N>"..table.concat(strT, "\n"), pn)
 end
 
 local ReadXML = function()
-    local xml = tfm.get.room.xmlMapInfo.xml
+    local xml = room.xmlMapInfo.xml
     if not xml then
         return
     end
-    local sT = roundv.mapinfo
+    local mp = roundv.mapinfo
+    mp.flags = 0
     for attr, val in xml:match('<P .->'):gmatch('(%S+)="(%S*)"') do
         local a = string.upper(attr)
-        if a == 'P' then sT.Portals = true
+        if a == 'P' then
+            mp.flags = bor(mp.flags, MP_PORTALS)
         elseif a == 'G' then
-            sT.Gravity = string_split(val or "")
-            sT.Wind, sT.Gravity = tonumber(sT.Gravity[1]), tonumber(sT.Gravity[2])
-        elseif a == 'MGOC' then sT.MGOC = tonumber(val)
-        elseif a:find('NOBALLOON') then sT.No_Balloon = true
-        elseif a:find('OPPORTUNIST') then sT.Opportunist = true
-        elseif a:find('NOB') and string.lower(val) == "true" then sT.No_B = true
+            local wg = string_split(val or "")
+            mp.Wind, mp.Gravity = tonumber(wg[1]), tonumber(wg[2])
+        elseif a == 'MGOC' then
+            mp.MGOC = tonumber(val)
+        elseif a == 'NOBALLOON' then
+            mp.flags = bor(mp.flags, MP_NOBALLOON)
+        elseif a == 'OPPORTUNIST' then
+            mp.flags = bor(mp.flags, MP_OPPORTUNIST)
+        elseif a == 'ORIGINALAUTHOR' then
+            mp.original_author = val
         end
     end
 end
@@ -1263,7 +1300,7 @@ UpdateCircle = function()
         if roundv.circle then
             tfm.exec.removeImage(roundv.circle)
         end
-        if bit32.band(playerData[display_to].toggles, OPT_CIRCLE) ~= 0 then
+        if band(playerData[display_to].toggles, OPT_CIRCLE) ~= 0 then
             roundv.circle = tfm.exec.addImage(IMG_RANGE_CIRCLE, "$"..display_for, -120, -120, display_to)
         else
             tfm.exec.removeImage(roundv.circle)
@@ -1316,8 +1353,8 @@ end
 
 function eventNewGame()
     print('ev newGame '..(new_game_vars.lobby and "is lobby" or "not lobby"))  -- temporary for debug b/4: init race condition
-    local mapcode = tonumber(tfm.get.room.currentMap:match('%d+'))
-    if (not module_started and mapcode ~= 7740307) or not tfm.get.room.xmlMapInfo then  -- workaround for b/4: init race condition
+    local mapcode = tonumber(room.currentMap:match('%d+'))
+    if (not module_started and mapcode ~= 7740307) or not room.xmlMapInfo then  -- workaround for b/4: init race condition
         roundv = { running = false }
         return
     end
@@ -1327,13 +1364,14 @@ function eventNewGame()
             Wind = 0,
             Gravity = 10,
             MGOC = 100,
-            mirrored = tfm.get.room.mirroredMap,
-            author = tfm.get.room.xmlMapInfo.author,
+            mirrored = room.mirroredMap,
+            author = room.xmlMapInfo.author,
             code = mapcode
         },
         shamans = {},
         shaman_turn = 1,
         undo_count = 0,
+        sballoon_count = 0,
         spawnlist = {},
         difficulty = new_game_vars.difficulty or 0,
         phase = 0,
@@ -1348,7 +1386,7 @@ function eventNewGame()
     pL.shaman = { _len = 0 }
     pL.non_shaman = { _len = 0 }
 
-    for name, p in pairs(tfm.get.room.playerList) do
+    for name, p in pairs(room.playerList) do
         if p.isShaman then
             roundv.shamans[#roundv.shamans+1] = name
             pL.shaman[name] = true
@@ -1373,7 +1411,7 @@ function eventNewGame()
             -- show back the GUI for the previous round of shamans
             for i = 1, #new_game_vars.previous_round.shamans do
                 local name = new_game_vars.previous_round.shamans[i]
-                if bit32.band(playerData[name].toggles, OPT_GUI) ~= 0 then
+                if band(playerData[name].toggles, OPT_GUI) ~= 0 then
                     sWindow.open(WINDOW_GUI, name)
                 end
             end
@@ -1406,7 +1444,6 @@ function eventNewGame()
 
         ReadXML()
         ShowMapInfo()
-        ShowMods()
         if #roundv.shamans == 2 then
             tfm.exec.chatMessage(string.format("<ROSE>Ξ <CH>%s <ROSE>& <font color='#FEB1FC'>%s <ROSE>are now the shaman pair!", pDisp(roundv.shamans[1]), pDisp(roundv.shamans[2])))
         else
@@ -1425,13 +1462,13 @@ function eventNewGame()
         
         tfm.exec.disableAfkDeath(false)
         tfm.exec.disableMortCommand(false)
-        tfm.exec.disablePrespawnPreview(bit32.band(roundv.mods, MOD_TELEPATHY) ~= 0)
+        tfm.exec.disablePrespawnPreview(band(roundv.mods, MOD_TELEPATHY) ~= 0)
 
         local time_limit = roundv.mode == TSM_HARD and 200 or 180
-        if bit32.band(roundv.mods, MOD_WORK_FAST) ~= 0 then
+        if band(roundv.mods, MOD_WORK_FAST) ~= 0 then
             time_limit = time_limit - 60
         end
-        if bit32.band(roundv.mods, MOD_SNAIL_NAIL) ~= 0 then
+        if band(roundv.mods, MOD_SNAIL_NAIL) ~= 0 then
             time_limit = time_limit + 30
         end
         tfm.exec.setGameTime(time_limit)
@@ -1441,7 +1478,7 @@ function eventNewGame()
 end
 
 function eventNewPlayer(pn)
-    local p = tfm.get.room.playerList[pn]
+    local p = room.playerList[pn]
     players[pn] = {
         windows = {
             help = false,
@@ -1461,7 +1498,7 @@ function eventNewPlayer(pn)
         players[pn].group = GROUP_DEV
     elseif staff[pn] then
         players[pn].group = GROUP_STAFF
-    elseif tfm.get.room.name:find(ZeroTag(pn)) or (p.tribeName and tfm.get.room.name:find(p.tribeName)) then
+    elseif room.name:find(ZeroTag(pn)) or (p.tribeName and room.name:find(p.tribeName)) then
         players[pn].group = GROUP_ADMIN
     end
 
@@ -1490,7 +1527,7 @@ function eventNewPlayer(pn)
 
     tfm.exec.setPlayerScore(pn, 0)
 
-    if bit32.band(playerData[pn].toggles, OPT_GUI) ~= 0 then
+    if band(playerData[pn].toggles, OPT_GUI) ~= 0 then
         sWindow.open(WINDOW_GUI, pn)
     end
     if roundv.lobby then
@@ -1542,7 +1579,7 @@ end
 function eventSummoningStart(pn, type, xPos, yPos, angle)
     roundv.startsummon = true  -- workaround b/2
     if type == 44 then  -- totems are banned; TODO: need more aggressive ban since this can be bypassed with (forced) lag
-        local player = tfm.get.room.playerList[pn]
+        local player = room.playerList[pn]
 		local x, y = player.x, player.y
         tfm.exec.setShamanMode(pn, roundv.mode == TSM_HARD and 1 or 2)
 		tfm.exec.movePlayer(pn, x, y, false, 0, 0, false)
@@ -1556,7 +1593,7 @@ function eventSummoningEnd(pn, type, xPos, yPos, angle, desc)
     end
     if roundv.startsummon then  -- workaround b/2: map prespawned object triggers summoning end event
         -- AntiLag™ by Leafileaf
-        if bit32.band(playerData[pn].toggles, OPT_ANTILAG) ~= 0 and desc.baseType ~= 17 and desc.baseType ~= 32 then
+        if band(playerData[pn].toggles, OPT_ANTILAG) ~= 0 and desc.baseType ~= 17 and desc.baseType ~= 32 then
             tfm.exec.moveObject(desc.id, xPos, yPos, false, 0, 0, false, angle, false)
         end
         if not roundv.lobby then
@@ -1570,8 +1607,16 @@ function eventSummoningEnd(pn, type, xPos, yPos, angle, desc)
                     --points deduct
                 else
                     if #roundv.shamans ~= 2 then return end
-                    local s1, s2 = tfm.get.room.playerList[roundv.shamans[1]], tfm.get.room.playerList[roundv.shamans[2]]
-                    if roundv.mode ~= TSM_HARD or pythag(s1.x, s1.y, s2.x, s2.y, 60) then  -- TODO: lowerSyncDelay for more accurate position
+                    local s1, s2 = room.playerList[roundv.shamans[1]], room.playerList[roundv.shamans[2]]
+                    if roundv.mode == TSM_HARD and not pythag(s1.x, s1.y, s2.x, s2.y, 60) then  -- TODO: lowerSyncDelay for more accurate position
+                        local other = rightful_turn == 1 and 2 or 1
+                        tfm.exec.removeObject(desc.id)
+                        tfm.exec.chatMessage("<J>Ξ Your partner needs to be within your spawning range.", pn)
+                        tfm.exec.chatMessage("<J>Ξ You need to be within your partner's spawning range.", roundv.shamans[other])
+                    elseif desc.baseType == 28 and not desc.ghost and roundv.sballoon_count >= 3 then
+                        tfm.exec.removeObject(desc.id)
+                        tfm.exec.chatMessage("<J>Ξ You may not spawn any more solid balloons.", pn)
+                    else
                         roundv.shaman_turn = rightful_turn == 1 and 2 or 1
                         UpdateTurnUI()
                         UpdateCircle()
@@ -1579,11 +1624,12 @@ function eventSummoningEnd(pn, type, xPos, yPos, angle, desc)
                         local sl = roundv.spawnlist[pn]
                         sl[sl._len+1] = desc.id
                         sl._len = sl._len + 1
-                    else
-                        local other = rightful_turn == 1 and 2 or 1
-                        tfm.exec.removeObject(desc.id)
-                        tfm.exec.chatMessage("<J>Ξ Your partner needs to be within your spawning range.", pn)
-                        tfm.exec.chatMessage("<J>Ξ You need to be within your partner's spawning range.", roundv.shamans[other])
+
+                        -- track solid balloons
+                        if desc.baseType == 28 and not desc.ghost and roundv.sballoon_count < 3 then
+                            roundv.sballoon_count = roundv.sballoon_count + 1
+                            tfm.exec.chatMessage(string.format("<ROSE>%s used a solid balloon! (%s left)", pDisp(pn), 3 - roundv.sballoon_count))
+                        end
                     end
                 end
             end
@@ -1594,8 +1640,8 @@ function eventSummoningEnd(pn, type, xPos, yPos, angle, desc)
             if ping >= ANTILAG_FORCE_THRESHOLD then
                 -- enable antilag
                 tfm.exec.chatMessage("<ROSE>Hey there, you appear to be really laggy. We have enabled AntiLag for you.", pn)
-                playerData[pn].toggles = bit32.bor(playerData[pn].toggles, OPT_ANTILAG)
-            elseif ping >= ANTILAG_WARN_THRESHOLD and bit32.band(playerData[pn].toggles, OPT_ANTILAG) == 0 then
+                playerData[pn].toggles = bor(playerData[pn].toggles, OPT_ANTILAG)
+            elseif ping >= ANTILAG_WARN_THRESHOLD and band(playerData[pn].toggles, OPT_ANTILAG) == 0 then
                 -- enable antilag if it isn't already so
                 tfm.exec.chatMessage("<ROSE>Hey there, you appear to have lagged. You should consider enabling AntiLag via the options menu (press O).", pn)
             end
@@ -1623,7 +1669,7 @@ local init = function()
         tfm.exec['disable'..v](true)
     end
     system.disableChatCommandDisplay(nil,true)
-    for name in pairs(tfm.get.room.playerList) do eventNewPlayer(name) end
+    for name in pairs(room.playerList) do eventNewPlayer(name) end
     tfm.exec.setRoomMaxPlayers(DEFAULT_MAX_PLAYERS)
     tfm.exec.setRoomPassword("")
     rotate_evt.lobby()
