@@ -1,9 +1,16 @@
+@include db2.lua
+
+-- Module variables
 local translations = {}
 local players = {}  -- module room player data
 local playerData = {}  -- module persistent player data
 local roundv = {}  -- data spanning the lifetime of the round
 local new_game_vars = {}  -- data spanning the lifetime till the next eventNewGame
+local db_cache = {}
+local mapcodes = {}
 local module_started = false
+local module_data_loaded = false
+local next_module_sync = nil  -- when the next module data syncing can occur
 
 -- Cached variable lookups (or rather in the fancy name of "spare my brains & hands lol")
 local room = tfm.get.room
@@ -63,6 +70,7 @@ local OPT_LANGUAGE = lshift(1, 3)
 local MP_PORTALS = lshift(1, 0)
 local MP_OPPORTUNIST = lshift(1, 1)
 local MP_NOBALLOON = lshift(1, 2)
+local MP_SEPARATESHAM = lshift(1, 3)
 
 -- Link IDs
 local LINK_DISCORD = 1
@@ -93,8 +101,26 @@ local TSM_DIV = 2
 -- Room
 local DEFAULT_MAX_PLAYERS = 50
 
+-- File number (this is per-Lua dev, change it accordingly and careful not to let your data get overridden!)
+local FILE_NUMBER = 2
+local FILE_LOAD_INTERVAL = 60005  -- in milliseconds
+
+-- DB2 Schemas
+local mod_schema = {
+    [1] = {
+        VERSION = 1,
+        db2.VarDataList{key="maps", size=4000, datatype=db2.Object{schema={
+            db2.UnsignedInt{key="code", size=4},
+            db2.UnsignedInt{key="hard", size=1},
+            db2.UnsignedInt{key="div", size=1},
+        }}},
+    }
+}
+-- 
+local LATEST_MOD_VER = 1
+
 -- Others
-local staff = {["Cass11337#8417"]=true, ["Emeryaurora#0000"]=true, ["Pegasusflyer#0000"]=true, ["Tactcat#0000"]=true, ["Leafileaf#0000"]=true, ["Rini#5475"]=true, ["Rayallan#0000"]=true}
+local staff = {["Cass11337#8417"]=true, ["Emeryaurora#0000"]=true, ["Pegasusflyer#0000"]=true, ["Tactcat#0000"]=true, ["Leafileaf#0000"]=true, ["Rini#5475"]=true, ["Rayallan#0000"]=true, ["Shibbbbbyy#1143"]=true}
 local dev = {["Cass11337#8417"]=true, ["Casserole#1798"]=true}
 
 local mods = {
@@ -117,24 +143,6 @@ local default_playerData = {
 -- Toggles enabled by default
 default_playerData.toggles = bor(default_playerData.toggles, OPT_GUI)
 default_playerData.toggles = bor(default_playerData.toggles, OPT_CIRCLE)
-
--- TODO: temporary..
-local mapdb = {
-    [TSM_HARD] = {
-        {"1803400", "6684914", "3742299", "3630912"},
-        {"1852359", "6244577"},
-        {"294822", "6400012"},
-        {"5417400", "2611862", "3292713", "3587523", "6114320", "1287411", "5479449", "1289915"},
-        {"1236698", "3833268", "7294988", "6971076"}
-    },
-    [TSM_DIV] = {
-        {"1803400", "6684914", "3742299", "3630912"},
-        {"1852359", "6244577"},
-        {"294822", "6400012"},
-        {"5417400", "2611862", "3292713", "3587523", "6114320", "1287411", "5479449", "1289915"},
-        {"1236698", "3833268", "7294988", "6971076"}
-    }
-}
 
 ----- Forward declarations (local)
 local keys, cmds, cmds_alias, callbacks, sWindow, GetExpMult, SetSpectate, UpdateCircle
@@ -197,7 +205,7 @@ end
 
 local function pDisp(pn)
     -- TODO: check if the player has the same name as another existing player in the room.
-    return pn and (pn:find('#') and pn:sub(1,-6)) or nil
+    return pn and (pn:find('#') and pn:sub(1,-6)) or "N/A"
 end
 
 local function pythag(x1, y1, x2, y2, r)
@@ -219,7 +227,7 @@ local function expDisp(n, addColor)
     return color..sign..math.abs(n*100).."%"
 end
 
------ LIBS / HELPERS
+----- HELPERS
 local map_sched = {}
 do
     local queued_code
@@ -254,21 +262,23 @@ end
 local rotate_evt
 do
     local function rotate()
+        if not module_data_loaded then
+            print("module data hasn't been loaded, retrying...")
+            system.newTimer(rotate, 50)  -- ewww
+        end
         local diff,map
+        local mode = roundv.mode
         if roundv.custommap then
             diff = 0
             map = roundv.custommap[1]
+            mode = roundv.custommap[2] or mode
         else
             repeat
                 diff = math.random(roundv.diff1, roundv.diff2)
-                map = mapdb[roundv.mode][diff][ math.random(1,#mapdb[roundv.mode][diff])]
+                map = mapcodes[roundv.mode][diff][ math.random(1,#mapcodes[roundv.mode][diff])]
             until not roundv.previousmap or tonumber(map) ~= roundv.previousmap
         end
-        if roundv.custommap and roundv.custommap[2] then
-            new_game_vars.mode = roundv.custommap[2]
-        else
-            new_game_vars.mode = roundv.mode
-        end
+        new_game_vars.mode = mode
         new_game_vars.difficulty = diff
         new_game_vars.mods = roundv.mods
 
@@ -276,9 +286,13 @@ do
     end
 
     local function lobby()
-        for name in cpairs(pL.shaman) do
-            players[name].internal_score = 0
-            tfm.exec.setPlayerScore(name, 0)
+        if roundv.lobby then  -- reloading lobby
+            sWindow.close(WINDOW_LOBBY, nil)
+        else
+            for name in cpairs(pL.shaman) do
+                players[name].internal_score = 0
+                tfm.exec.setPlayerScore(name, 0)
+            end
         end
 
         local highest = {-1}
@@ -434,7 +448,7 @@ do
                 end
                 for i, v in pairs(tabs) do
                     local opacity = (v == tab) and 0 or 1 
-                    ui.addTextArea(WINDOW_HELP+1+i, GUI_BTN.."<font size='2'><br><font size='12'><p align='center'><a href='event:help!"..v.."'>"..v.."</a>",pn,92+((i-1)*130),50,100,24,0x666666,0x676767,opacity,true)
+                    ui.addTextArea(WINDOW_HELP+1+i, GUI_BTN.."<font size='2'><br><font size='12'><p align='center'><a href='event:help!"..v.."'>"..v.."\n</a>",pn,92+((i-1)*130),50,100,24,0x666666,0x676767,opacity,true)
                 end
                 p_data.tab = tab
 
@@ -473,9 +487,8 @@ Link: %s<a href="event:link!%s">discord.gg/YkzM4rh</a>
 <p align="left"><font size='12'><N>#shamteam is brought to you by the Academy of Building! It would not be possible without the following people:
 
 <J>Casserole#1798<N> - Developer
-<J>Emeryaurora#0000<N> - Module inspiration, module designer & mapcrew
-<J>Pegasusflyer#0000<N> - Module inspiration, module designer & mapcrew
-<J>Tactcat#0000<N> - Module inspiration
+<J>Emeryaurora#0000<N> - Module designer & original concept maker
+<J>Pegasusflyer#0000<N> - Module designer
 
 A full list of staff are available via the !staff command. 
                     ]]
@@ -518,7 +531,7 @@ A full list of staff are available via the !staff command.
                 --ui.addTextArea(WINDOW_LOBBY+3,"",pn,120,85,265,200,0xcdcdcd,0xbababa,.1,true)
                 --ui.addTextArea(WINDOW_LOBBY+4,"",pn,415,85,265,200,0xcdcdcd,0xbababa,.1,true)
                 ui.addTextArea(WINDOW_LOBBY+5,"<p align='center'><font size='13'><b>"..pDisp(roundv.shamans[1]),pn,118,90,269,nil,1,0,1,true)
-                ui.addTextArea(WINDOW_LOBBY+6,"<p align='center'><font size='13'><b>"..(pDisp(roundv.shamans[2]) or 'N/A'),pn,413,90,269,nil,1,0,1,true)
+                ui.addTextArea(WINDOW_LOBBY+6,"<p align='center'><font size='13'><b>"..pDisp(roundv.shamans[2]),pn,413,90,269,nil,1,0,1,true)
 
                 -- mode
                 p_data.images.mode[TSM_HARD] = {tfm.exec.addImage(roundv.mode == TSM_HARD and IMG_FEATHER_HARD or IMG_FEATHER_HARD_DISABLED, ":"..WINDOW_LOBBY, 202, 125, pn), 202, 125}
@@ -822,13 +835,12 @@ cmds = {
     ch = {
         func = function(pn, m, w1, w2, w3)
             local s1, s2 = pFind(w2, pn), pFind(w3, pn)
-            if not s1 or not s2 then return
-            elseif roundv.lobby then
-                tfm.exec.chatMessage("You may only use !ch outside of the lobby.", pn)
-                return
-            end
+            if not s1 or not s2 then return end
             roundv.customshams = {s1, s2}
             tfm.exec.chatMessage(s1.." & "..s2.." will be the shamans the next round.", pn)
+            if roundv.lobby then
+                rotate_evt.lobby()  -- reload the lobby
+            end
         end,
         perms = GROUP_STAFF
     },
@@ -946,6 +958,7 @@ cmds = {
 - Pegasusflyer#0000
 - Rini#5475
 - Rayallan#0000
+- Shibbbbbyy#1143
 
 <J>Module developers:<N>
 - Casserole#1798
@@ -1090,10 +1103,10 @@ callbacks = {
         local diff_id = "diff"..id
         local new_diff = roundv[diff_id] + add
 
-        if new_diff < 1 or new_diff > #mapdb[roundv.mode]
+        if new_diff < 1 or new_diff > #mapcodes[roundv.mode]
                 or (id == 1 and roundv.diff2 - new_diff < 1)
                 or (id == 2 and new_diff - roundv.diff1 < 1) then  -- range error
-            tfm.exec.chatMessage(string.format("<R>error: range must have a value of 1-%s and have a difference of at least 1", #mapdb[roundv.mode]), pn)
+            tfm.exec.chatMessage(string.format("<R>error: range must have a value of 1-%s and have a difference of at least 1", #mapcodes[roundv.mode]), pn)
             return
         end
 
@@ -1266,7 +1279,7 @@ local ReadXML = function()
     end
     local mp = roundv.mapinfo
     mp.flags = 0
-    for attr, val in xml:match('<P .->'):gmatch('(%S+)="(%S*)"') do
+    for attr, val in xml:match('<P .->'):gmatch('([^%s]-)="(.-)"') do
         local a = string.upper(attr)
         if a == 'P' then
             mp.flags = bor(mp.flags, MP_PORTALS)
@@ -1279,8 +1292,19 @@ local ReadXML = function()
             mp.flags = bor(mp.flags, MP_NOBALLOON)
         elseif a == 'OPPORTUNIST' then
             mp.flags = bor(mp.flags, MP_OPPORTUNIST)
+        elseif a == 'SEPARATESHAM' then
+            mp.flags = bor(mp.flags, MP_SEPARATESHAM)
         elseif a == 'ORIGINALAUTHOR' then
             mp.original_author = val
+        end
+    end
+    local dc = xml:match('<DC (.-)>')
+    if dc then
+        mp.DC = {}
+        mp.DC[1] = { tonumber(dc:match('X="(%d-)"')) or 0, tonumber(dc:match('Y="(%d-)"')) or 0 }
+        local dc2 = xml:match('<DC2 (.-)>')
+        if dc2 then
+            mp.DC[2] = { tonumber(dc2:match('X="(%d-)"')) or 0, tonumber(dc2:match('Y="(%d-)"')) or 0 }
         end
     end
 end
@@ -1309,6 +1333,30 @@ UpdateCircle = function()
     end
 end
 
+local UpdateMapCodes = function()
+    local maps = db_cache.maps
+    mapcodes = {[TSM_HARD]={}, [TSM_DIV]={}}
+    local hardcodes, divcodes = mapcodes[TSM_HARD], mapcodes[TSM_DIV]
+    for i = 1, #maps do
+        local map = maps[i]
+        if map.hard > 0 then
+            if not hardcodes[map.hard] then hardcodes[map.hard] = {} end
+            local cat = hardcodes[map.hard]
+            cat[#cat+1] = map.code
+        end
+        if map.div > 0 then
+            if not divcodes[map.div] then divcodes[map.div] = {} end
+            local cat = divcodes[map.div]
+            cat[#cat+1] = map.code
+        end
+    end
+end
+
+local SyncModuleData = function(data)
+    db_cache = db2.decode(mod_schema, data)
+    UpdateMapCodes()
+end
+
 ----- EVENTS
 function eventChatCommand(pn, msg)
     local words = string_split(string.lower(msg), "%s")
@@ -1325,6 +1373,17 @@ function eventChatCommand(pn, msg)
     
 end
 
+function eventFileLoaded(file, data)
+    if tonumber(file) ~= FILE_NUMBER then return end
+    local success, result = pcall(SyncModuleData, data)
+    if not success then
+        module_data_loaded = false
+        print(string.format("Exception encountered in eventFileLoaded: %s", result))
+    else
+        module_data_loaded = true
+    end
+end
+
 function eventKeyboard(pn, k, d, x, y)
     if keys[k] then
         keys[k].func(pn, d, x, y)
@@ -1333,12 +1392,16 @@ end
 
 function eventLoop(elapsed, remaining)
     map_sched.run()
+    if next_module_sync and os.time() >= next_module_sync then
+        system.loadFile(FILE_NUMBER)
+        next_module_sync = os.time() + FILE_LOAD_INTERVAL
+    end
     if not roundv.running then return end
     if roundv.phase < 3 and remaining <= 0 then
         rotate_evt.timesup()
         roundv.phase = 3
     elseif roundv.lobby then
-        ui.setMapName(string.format("<N>Next Shamans: <CH>%s <N>- <font color='#FEB1FC'>%s  <G>|  <N>Game starts in: <V>%s  <G>|  <N>Mice: <V>%s<", pDisp(roundv.shamans[1]), pDisp(roundv.shamans[2]) or '', math_round(remaining/1000), pL.room._len))
+        ui.setMapName(string.format("<N>Next Shamans: <CH>%s <N>- <CHR>%s  <G>|  <N>Game starts in: <V>%s  <G>|  <N>Mice: <V>%s<", pDisp(roundv.shamans[1]), pDisp(roundv.shamans[2]) or '', math_round(remaining/1000), pL.room._len))
     end
 end
 
@@ -1354,8 +1417,17 @@ end
 function eventNewGame()
     print('ev newGame '..(new_game_vars.lobby and "is lobby" or "not lobby"))  -- temporary for debug b/4: init race condition
     local mapcode = tonumber(room.currentMap:match('%d+'))
-    if (not module_started and mapcode ~= 7740307) or not room.xmlMapInfo then  -- workaround for b/4: init race condition
+    local diff = new_game_vars.difficulty or 0
+    if (not module_started and mapcode ~= 7740307) then  -- workaround for b/4: init race condition
         roundv = { running = false }
+        return
+    end
+    -- Bail out if the map is vanilla or a map in rotation that is NOT dual shaman
+    if mapcode < 1000 or (diff ~= 0 and not roundv.lobby and (room.xmlMapInfo.mapCode ~= 8 and room.xmlMapInfo.mapCode ~= 32)) then
+        roundv = { running = false }
+        tfm.exec.chatMessage("<R>Ξ Faulty map! Please help report this map: @"..mapcode)
+        tfm.exec.setGameTime(3)
+        rotate_evt.lobby()
         return
     end
     if not module_started then module_started = true end
@@ -1373,7 +1445,7 @@ function eventNewGame()
         undo_count = 0,
         sballoon_count = 0,
         spawnlist = {},
-        difficulty = new_game_vars.difficulty or 0,
+        difficulty = diff,
         phase = 0,
         lobby = new_game_vars.lobby,
         start_epoch = os.time(),
@@ -1405,7 +1477,7 @@ function eventNewGame()
 
     if roundv.lobby then
         roundv.diff1 = 1
-        roundv.diff2 = 3
+        roundv.diff2 = 5
         roundv.shaman_ready = {}
         if new_game_vars.previous_round then
             -- show back the GUI for the previous round of shamans
@@ -1419,9 +1491,9 @@ function eventNewGame()
             roundv.previousmap = new_game_vars.previous_round.mapcode
         end
         sWindow.open(WINDOW_LOBBY, nil)
-        tfm.exec.setGameTime(20)
+        tfm.exec.setGameTime(30)
         if #roundv.shamans == 2 then
-            tfm.exec.chatMessage(string.format("<ROSE>Ξ <CH>%s <ROSE>& <font color='#FEB1FC'>%s <ROSE>are the next shaman pair!", pDisp(roundv.shamans[1]), pDisp(roundv.shamans[2])))
+            tfm.exec.chatMessage(string.format("<ROSE>Ξ <CH>%s <ROSE>& <CHR>%s <ROSE>are the next shaman pair!", pDisp(roundv.shamans[1]), pDisp(roundv.shamans[2])))
         else
             tfm.exec.chatMessage("<R>Ξ No shaman pair!")
         end
@@ -1429,6 +1501,8 @@ function eventNewGame()
         tfm.exec.disableMortCommand(true)
         tfm.exec.disablePrespawnPreview(false)
     else
+        ReadXML()
+
         for i = 1, #roundv.shamans do
             local name = roundv.shamans[i]
 
@@ -1440,12 +1514,17 @@ function eventNewGame()
             -- Force the mode; this also teleports both shamans to the blue's spawnpoint
             tfm.exec.setShamanMode(name, roundv.mode == TSM_HARD and 1 or 2)
 
+            if band(roundv.mapinfo.flags, MP_SEPARATESHAM) ~= 0 then
+                local dc = roundv.mapinfo.DC[i]
+                if dc then
+                    tfm.exec.movePlayer(name, dc[1], dc[2])
+                end
+            end
         end
 
-        ReadXML()
         ShowMapInfo()
         if #roundv.shamans == 2 then
-            tfm.exec.chatMessage(string.format("<ROSE>Ξ <CH>%s <ROSE>& <font color='#FEB1FC'>%s <ROSE>are now the shaman pair!", pDisp(roundv.shamans[1]), pDisp(roundv.shamans[2])))
+            tfm.exec.chatMessage(string.format("<ROSE>Ξ <CH>%s <ROSE>& <CHR>%s <ROSE>are now the shaman pair!", pDisp(roundv.shamans[1]), pDisp(roundv.shamans[2])))
         else
             tfm.exec.chatMessage("<R>Ξ No shaman pair!")
         end
@@ -1523,7 +1602,7 @@ function eventNewPlayer(pn)
     pL.dead[pn] = true
     pL.dead._len = pL.dead._len + 1
 
-    tfm.exec.chatMessage("\t<VP>Ξ Welcome to <b>Team Shaman (TSM)</b> v0.5 Alpha! Ξ\n<J>TSM is a building module where dual shamans take turns to spawn objects.\nPress H for more information.\n<R>NOTE: <VP>Module is in early stages of development and may see incomplete or broken features.", pn)
+    tfm.exec.chatMessage("\t<VP>Ξ Welcome to <b>Team Shaman (TSM)</b> v0.6 Alpha! Ξ\n<J>TSM is a building module where dual shamans take turns to spawn objects.\nPress H for more information.\n<R>NOTE: <VP>Module is in early stages of development and may see incomplete or broken features.", pn)
 
     tfm.exec.setPlayerScore(pn, 0)
 
@@ -1599,6 +1678,13 @@ function eventSummoningEnd(pn, type, xPos, yPos, angle, desc)
         if not roundv.lobby then
             if type == 0 then  -- arrow
                 --points deduct for tdm
+            elseif desc.baseType == 28 then  -- balloon
+                if band(roundv.mapinfo.flags, MP_NOBALLOON) ~= 0 then
+                    tfm.exec.removeObject(desc.id)
+                elseif not desc.ghost and roundv.sballoon_count >= 3 then
+                    tfm.exec.removeObject(desc.id)
+                    tfm.exec.chatMessage("<J>Ξ You may not spawn any more solid balloons.", pn)
+                end
             else
                 local rightful_turn = roundv.shaman_turn
                 if pn ~= roundv.shamans[rightful_turn] then
@@ -1613,9 +1699,6 @@ function eventSummoningEnd(pn, type, xPos, yPos, angle, desc)
                         tfm.exec.removeObject(desc.id)
                         tfm.exec.chatMessage("<J>Ξ Your partner needs to be within your spawning range.", pn)
                         tfm.exec.chatMessage("<J>Ξ You need to be within your partner's spawning range.", roundv.shamans[other])
-                    elseif desc.baseType == 28 and not desc.ghost and roundv.sballoon_count >= 3 then
-                        tfm.exec.removeObject(desc.id)
-                        tfm.exec.chatMessage("<J>Ξ You may not spawn any more solid balloons.", pn)
                     else
                         roundv.shaman_turn = rightful_turn == 1 and 2 or 1
                         UpdateTurnUI()
@@ -1673,6 +1756,9 @@ local init = function()
     tfm.exec.setRoomMaxPlayers(DEFAULT_MAX_PLAYERS)
     tfm.exec.setRoomPassword("")
     rotate_evt.lobby()
+
+    system.loadFile(FILE_NUMBER)
+    next_module_sync = os.time() + FILE_LOAD_INTERVAL
 end
 
 init()
