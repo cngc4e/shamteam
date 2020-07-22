@@ -1,4 +1,5 @@
 @include db2.lua
+@include PairTable.lua
 
 -- Module variables
 local translations = {}
@@ -23,14 +24,20 @@ local rshift = bit32.rshift -- x >> y
 
 -- Keeps an accurate list of players and their states by rely on asynchronous events to update
 -- This works around playerList issues which are caused by it relying on sync and can be slow to update
-local pL = {
-    room = { _len = 0 },
-    alive = { _len = 0 },
-    dead = { _len = 0},
-    shaman = { _len = 0 },
-    non_shaman = { _len = 0 },
-    spectator = { _len = 0 },
-}
+local pL = {}
+do
+    local states = {
+        "room",
+        "alive",
+        "dead",
+        "shaman",
+        "non_shaman",
+        "spectator"
+    }
+    for i = 1, #states do
+        pL[states[i]] = PairTable:new()
+    end
+end
 
 ----- ENUMS / CONST DEFINES
 -- Permission levels
@@ -289,7 +296,7 @@ do
         if roundv.lobby then  -- reloading lobby
             sWindow.close(WINDOW_LOBBY, nil)
         else
-            for name in cpairs(pL.shaman) do
+            for name in pL.shaman:pairs() do
                 players[name].internal_score = 0
                 tfm.exec.setPlayerScore(name, 0)
             end
@@ -297,7 +304,7 @@ do
 
         local highest = {-1}
         local second_highest = nil
-        for name in cpairs(pL.room) do
+        for name in pL.room:pairs() do
             if not pL.spectator[name] then
                 players[name].internal_score = players[name].internal_score + 1
                 if players[name].internal_score >= highest[1] then
@@ -336,7 +343,7 @@ do
     local function diedwon(type, pn)
         local allplayerdead = true
         local allnonshamdead = true
-        for name in cpairs(pL.room) do
+        for name in pL.room:pairs() do
             if not pL.dead[name] then allplayerdead = false end
             if not pL.dead[name] and pL.non_shaman[name] then allnonshamdead = false end
         end
@@ -345,7 +352,7 @@ do
         elseif allnonshamdead then
             if type=='won' then tfm.exec.setGameTime(20) end
             if band(roundv.mapinfo.flags, MP_OPPORTUNIST) ~= 0 then
-                for name in cpairs(pL.shaman) do
+                for name in pL.shaman:pairs() do
                     tfm.exec.giveCheese(name)
                     tfm.exec.playerVictory(name)
                 end
@@ -1075,7 +1082,7 @@ callbacks = {
         end
         roundv.mode = mode_id
 
-        for name in cpairs(pL.room) do
+        for name in pL.room:pairs() do
             local imgs = sWindow.getImages(WINDOW_LOBBY, name)
             local img_dats = imgs.mode
             if img_dats and img_dats[mode_id] then
@@ -1141,7 +1148,7 @@ callbacks = {
         end
         roundv.mods = bxor(roundv.mods, mod_id)  -- flip and toggle the flag
         local is_set = band(roundv.mods, mod_id) ~= 0
-        for name in cpairs(pL.room) do
+        for name in pL.room:pairs() do
             local imgs = sWindow.getImages(WINDOW_LOBBY, name)
             local img_dats = imgs.toggle
             if img_dats and img_dats[mod_id] then
@@ -1218,15 +1225,13 @@ end
 
 SetSpectate = function(pn, b)
     if b and not pL.spectator[pn] then
-        pL.spectator[pn] = true
-        pL.spectator._len = pL.spectator._len + 1
+        pL.spectator:add(pn)
         players[pn].internal_score = -1
         tfm.exec.killPlayer(pn)
         tfm.exec.setPlayerScore(pn, -5)
         ui.addTextArea(TA_SPECTATING, GUI_BTN.."<font size='14'><p align='center'><a href='event:unafk'>You have entered spectator mode.\nClick here to exit spectator mode.", pn, 190, 355, 420, nil, 1, 0, .7, true)
     elseif pL.spectator[pn] then
-        pL.spectator[pn] = nil
-        pL.spectator._len = pL.spectator._len - 1
+        pL.spectator[pn]:remove(pn)
         players[pn].internal_score = 0
         tfm.exec.setPlayerScore(pn, 0)
         ui.removeTextArea(TA_SPECTATING, pn)
@@ -1401,7 +1406,7 @@ function eventLoop(elapsed, remaining)
         rotate_evt.timesup()
         roundv.phase = 3
     elseif roundv.lobby then
-        ui.setMapName(string.format("<N>Next Shamans: <CH>%s <N>- <CHR>%s  <G>|  <N>Game starts in: <V>%s  <G>|  <N>Mice: <V>%s<", pDisp(roundv.shamans[1]), pDisp(roundv.shamans[2]) or '', math_round(remaining/1000), pL.room._len))
+        ui.setMapName(string.format("<N>Next Shamans: <CH>%s <N>- <CH2>%s  <G>|  <N>Game starts in: <V>%s  <G>|  <N>Mice: <V>%s<", pDisp(roundv.shamans[1]), pDisp(roundv.shamans[2]) or '', math_round(remaining/1000), pL.room:len()))
     end
 end
 
@@ -1453,24 +1458,22 @@ function eventNewGame()
         mods = new_game_vars.mods or 0,
     }
 
-    pL.dead = { _len = 0 }
-    pL.alive = table_copy(pL.room)
-    pL.shaman = { _len = 0 }
-    pL.non_shaman = { _len = 0 }
+    pL.dead = PairTable:new()
+    pL.alive = PairTable:new(room)
+    pL.shaman = PairTable:new()
+    pL.non_shaman = PairTable:new()
 
     for name, p in pairs(room.playerList) do
         if p.isShaman then
             roundv.shamans[#roundv.shamans+1] = name
-            pL.shaman[name] = true
-            pL.shaman._len = pL.shaman._len + 1
+            pL.shaman:add(name)
         else
-            pL.non_shaman[name] = true
-            pL.non_shaman._len = pL.non_shaman._len + 1
+            pL.non_shaman:add(name)
         end
     end
     assert(#roundv.shamans <= 2, "Shaman count is greater than 2: "..#roundv.shamans)
 
-    for name in cpairs(pL.spectator) do
+    for name in pL.spectator:pairs() do
         tfm.exec.killPlayer(name)
         tfm.exec.setPlayerScore(name, -5)
     end
@@ -1493,7 +1496,7 @@ function eventNewGame()
         sWindow.open(WINDOW_LOBBY, nil)
         tfm.exec.setGameTime(30)
         if #roundv.shamans == 2 then
-            tfm.exec.chatMessage(string.format("<ROSE>Ξ <CH>%s <ROSE>& <CHR>%s <ROSE>are the next shaman pair!", pDisp(roundv.shamans[1]), pDisp(roundv.shamans[2])))
+            tfm.exec.chatMessage(string.format("<ROSE>Ξ <CH>%s <ROSE>& <CH2>%s <ROSE>are the next shaman pair!", pDisp(roundv.shamans[1]), pDisp(roundv.shamans[2])))
         else
             tfm.exec.chatMessage("<R>Ξ No shaman pair!")
         end
@@ -1524,7 +1527,7 @@ function eventNewGame()
 
         ShowMapInfo()
         if #roundv.shamans == 2 then
-            tfm.exec.chatMessage(string.format("<ROSE>Ξ <CH>%s <ROSE>& <CHR>%s <ROSE>are now the shaman pair!", pDisp(roundv.shamans[1]), pDisp(roundv.shamans[2])))
+            tfm.exec.chatMessage(string.format("<ROSE>Ξ <CH>%s <ROSE>& <CH2>%s <ROSE>are now the shaman pair!", pDisp(roundv.shamans[1]), pDisp(roundv.shamans[2])))
         else
             tfm.exec.chatMessage("<R>Ξ No shaman pair!")
         end
@@ -1594,13 +1597,11 @@ function eventNewPlayer(pn)
     end
 
     local load_lobby = false
-    if pL.room._len == 1 and false then  -- TODO: restart to the lobby, doesn't work well atm
+    if pL.room:len() == 1 and roundv.lobby and module_started then
         load_lobby = true
     end
-    pL.room[pn] = true
-    pL.room._len = pL.room._len + 1
-    pL.dead[pn] = true
-    pL.dead._len = pL.dead._len + 1
+    pL.room:add(pn)
+    pL.dead:add(pn)
 
     tfm.exec.chatMessage("\t<VP>Ξ Welcome to <b>Team Shaman (TSM)</b> v0.6 Alpha! Ξ\n<J>TSM is a building module where dual shamans take turns to spawn objects.\nPress H for more information.\n<R>NOTE: <VP>Module is in early stages of development and may see incomplete or broken features.", pn)
 
@@ -1619,27 +1620,21 @@ function eventNewPlayer(pn)
 end
 
 function eventPlayerDied(pn)
-    pL.alive[pn] = nil
-    pL.alive._len = pL.alive._len - 1
-    pL.dead[pn] = true
-    pL.dead._len = pL.dead._len + 1
+    pL.alive:remove(pn)
+    pL.dead:add(pn)
     rotate_evt.died(pn)
 end
 
 function eventPlayerWon(pn, elapsed)
-    pL.alive[pn] = nil
-    pL.alive._len = pL.alive._len - 1
-    pL.dead[pn] = true
-    pL.dead._len = pL.dead._len + 1
+    pL.alive:remove(pn)
+    pL.dead:add(pn)
     rotate_evt.won(pn)
 end
 
 function eventPlayerLeft(pn)
-    pL.room[pn] = nil
-    pL.room._len = pL.room._len - 1
+    pL.room:remove(pn)
     if pL.spectator[pn] then
-        pL.spectator[pn] = nil
-        pL.spectator._len = pL.spectator._len - 1
+        pL.spectator:remove(pn)
     end
     if players[pn].pair then
         local target = players[pn].pair
@@ -1649,10 +1644,8 @@ function eventPlayerLeft(pn)
 end
 
 function eventPlayerRespawn(pn)
-    pL.dead[pn] = nil
-    pL.dead._len = pL.dead._len - 1
-    pL.alive[pn] = true
-    pL.alive._len = pL.alive._len + 1
+    pL.dead:remove(pn)
+    pL.alive:add(pn)
 end
 
 function eventSummoningStart(pn, type, xPos, yPos, angle)
