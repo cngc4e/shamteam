@@ -13,6 +13,8 @@ local module_started = false
 local module_data_loaded = false
 local next_module_sync = nil  -- when the next module data syncing can occur
 
+@include translations-gen/*.lua
+
 -- Cached variable lookups (or rather in the fancy name of "spare my brains & hands lol")
 local room = tfm.get.room
 local band = bit32.band     -- x & Y
@@ -189,6 +191,15 @@ local function cnext(tbl, k)
 end
 local function cpairs(tbl)
     return cnext, tbl, nil
+end
+
+local function tl(name, lang)
+    local lang = translations[lang] and lang or "en"
+    if translations[lang][name] then
+        return translations[lang][name]
+    else
+        return name
+    end
 end
 
 local function ZeroTag(pn, add) --#0000 removed for tag matches
@@ -1062,7 +1073,7 @@ callbacks = {
     end,
     unafk = function(pn)
         SetSpectate(pn, false)
-        tfm.exec.chatMessage("<ROSE>Welcome back! We've been expecting you.", pn)
+        tfm.exec.chatMessage("<ROSE>"..tl("unafk", players[pn].lang), pn)
     end,
     link = function(pn, link_id)
         -- Do not print out raw text from players! Use predefined IDs instead.
