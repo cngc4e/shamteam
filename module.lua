@@ -116,6 +116,7 @@ local DEFAULT_MAX_PLAYERS = 50
 local MODULE_ID = 2
 local FILE_NUMBER = MODULE_ID
 local FILE_LOAD_INTERVAL = 60005  -- in milliseconds
+local SAVE_PD_WAITTIME = 5000  -- in milliseconds, minimum waiting time for saving player data when saving is requested via md.scheduleSave
 
 -- Module data
 local MOD_SCHEMA = {
@@ -275,6 +276,85 @@ do
 
     map_sched.load = load
     map_sched.run = run
+end
+
+-- Player data helper
+local PDHelper
+do
+    local save_at = {}
+
+    local schedule_save = function(pn)
+        if not save_at[pn] then
+            save_at[pn] = os.time() + SAVE_PD_WAITTIME
+        end
+    end
+
+    local save_now = function(pn)
+        local global_pd = global_playerData[pn]
+        local modules = global_pd.modules
+        local found = nil
+        for i = 1, #modules do
+            if modules[i].id == MODULE_ID then
+                found = modules[i]
+                break
+            end
+        end
+        local encoded_module_pd = db2.encode(MODULE_PD_SCHEMA, playerData[pn])
+        if found then
+            -- Existing module specific player data, just update it
+            found.encoded = encoded_module_pd
+            print("save existing "..pn)
+        else
+            -- Initialise fresh module specific player data
+            modules[#modules+1] = {
+                id = MODULE_ID,
+                encoded = encoded_module_pd
+            }
+            print("save new "..pn)
+        end
+        local encoded_global_pd = db2.encode(GLOBAL_PD_SCHEMA, global_pd)
+        system.savePlayerData(pn, encoded_global_pd)
+    end
+
+    local load_now = function(pn, data)
+        local global_pd = db2.decode(GLOBAL_PD_SCHEMA, data)
+        local modules = global_pd.modules
+        global_playerData[pn] = global_pd
+    
+        local encoded_module_pd = nil
+        for i = 1, #modules do
+            if modules[i].id == MODULE_ID then
+                encoded_module_pd = modules[i].encoded
+                break
+            end
+        end
+        if encoded_module_pd then
+            playerData[pn] = db2.decode(MODULE_PD_SCHEMA, encoded_module_pd)
+            print("load existing "..pn)
+        end
+    end
+
+    local check_saves = function()
+        local now = os.time()
+        local yeetaway = { _len=0 }
+        for name, at in pairs(save_at) do
+            if now >= at then
+                save_now(name)
+                yeetaway[yeetaway._len + 1] = name
+                yeetaway._len = yeetaway._len + 1
+            end
+        end
+        for i = 1, yeetaway._len do
+            save_at[yeetaway[i]] = nil
+        end
+    end
+
+    PDHelper = {
+        scheduleSave = schedule_save,
+        save = save_now,
+        load = load_now,
+        checkSaves = check_saves,
+    }
 end
 
 -- Handles map rotation and scoring
@@ -445,7 +525,13 @@ do
         },
         [WINDOW_HELP] = {
             open = function(pn, p_data, tab)
-                local tabs = {'Welcome','Rules','Commands','Contributors','Close'}
+                local tabs = {
+                    {'Welcome', 'help_tab_welcome'},
+                    {'Rules', 'help_tab_rules'},
+                    {'Commands', 'help_tab_commands'},
+                    {'Contributors', 'help_tab_contributors'},
+                    {'Close', 'close'}
+                }
                 local tabs_k = {['Welcome']=true,['Rules']=true,['Commands']=true,['Contributors']=true}
                 tab = tab or 'Welcome'
 
@@ -466,50 +552,28 @@ do
                     end
                 end
                 for i, v in pairs(tabs) do
-                    local opacity = (v == tab) and 0 or 1 
-                    ui.addTextArea(WINDOW_HELP+1+i, GUI_BTN.."<font size='2'><br><font size='12'><p align='center'><a href='event:help!"..v.."'>"..v.."\n</a>",pn,92+((i-1)*130),50,100,24,0x666666,0x676767,opacity,true)
+                    local iden, tl_key = v[1], v[2]
+                    local translated = tl(tl_key, players[pn].lang)
+                    local opacity = (iden == tab) and 0 or 1 
+                    ui.addTextArea(WINDOW_HELP+1+i, GUI_BTN.."<font size='2'><br><font size='12'><p align='center'><a href='event:help!"..iden.."'>"..translated.."\n</a>",pn,92+((i-1)*130),50,100,24,0x666666,0x676767,opacity,true)
                 end
                 p_data.tab = tab
 
                 if tab == "Welcome" then
-                    local text = string.format(tl("help_welcome", players[pn].lang), GUI_BTN, LINK_DISCORD)
+                    local text = string.format(tl("help_content_welcome", players[pn].lang), GUI_BTN, LINK_DISCORD)
                     ui.addTextArea(WINDOW_HELP+21,text,pn,88,95,625,nil,0,0,0,true)
                 elseif tab == "Rules" then
-                    local text = [[
-<p align="center"><J><font size='14'><b>Rules</b></font></p>
-<p align="left"><font size='12'><N>- In hard mode, you must be within your partner's spawning range for a successful spawn.
-- In divine mode, using arrows deduct points.
-- Only up to 3 solid balloons may be used.
-- Spawning an object while it is not your turn will result in points deduction.
-                    ]]
+                    local text = tl("help_content_rules", players[pn].lang)
                     ui.addTextArea(WINDOW_HELP+31,text,pn,88,95,625,nil,0,0,0,true)
                 elseif tab == "Commands" then
-                    local text = [[
-<p align="center"><J><font size='14'><b>Commands</b></font></p>
-<p align="left"><font size='12'><N>!m/!mort - kills yourself
-!afk - mark yourself as a spectator
-!pair [player] - request to pair up with a player
-!cancel - cancels existing forced pairing or pairing request
-
-!stats [player] - view your stats or another player’s
-                    ]]
+                    local text = tl("help_content_commands", players[pn].lang)
                     ui.addTextArea(WINDOW_HELP+41,text,pn,88,95,625,nil,0,0,0,true)
                 elseif tab == "Contributors" then
-                    local text = [[
-<p align="center"><J><font size='14'><b>Contributors</b></font></p>
-<p align="left"><font size='12'><N>#shamteam is brought to you by the Academy of Building! It would not be possible without the following people:
-
-<J>Casserole#1798<N> - Developer
-<J>Emeryaurora#0000<N> - Module designer & original concept maker
-<J>Pegasusflyer#0000<N> - Module designer
-
-A full list of staff are available via the !staff command. 
-                    ]]
+                    local text = tl("help_content_contributors", players[pn].lang)
                     ui.addTextArea(WINDOW_HELP+51,text,pn,88,95,625,nil,0,0,0,true)
                     --local img_id = tfm.exec.addImage("172cde7e326.png", "&1", 571, 180, pn)
                     --p_data.images[tab] = {img_id}
                 end
-
             end,
             close = function(pn, p_data)
                 for i = 1, 10 do
@@ -1203,6 +1267,9 @@ callbacks = {
                 UpdateCircle()
             end
         end
+
+        -- Schedule saving
+        PDHelper.scheduleSave(pn)
     end,
     opthelp = function(pn, opt_id)
         opt_id = tonumber(opt_id) or -1
@@ -1368,51 +1435,6 @@ local SyncModuleData = function(data)
     UpdateMapCodes()
 end
 
-local SavePlayerData = function(pn)
-    local global_pd = global_playerData[pn]
-    local modules = global_pd.modules
-    local found = nil
-    for i = 1, #modules do
-        if modules[i].id == MODULE_ID then
-            found = modules[i]
-            break
-        end
-    end
-    local encoded_module_pd = db2.encode(MODULE_PD_SCHEMA, playerData[pn])
-    if found then
-        -- Existing module specific player data, just update it
-        found.encoded = encoded_module_pd
-        print("save existing "..pn)
-    else
-        -- Initialise fresh module specific player data
-        modules[#modules+1] = {
-            id = MODULE_ID,
-            encoded = encoded_module_pd
-        }
-        print("save new "..pn)
-    end
-    local encoded_global_pd = db2.encode(GLOBAL_PD_SCHEMA, global_pd)
-    system.savePlayerData(pn, encoded_global_pd)
-end
-
-local LoadPlayerData = function(pn, data)
-    local global_pd = db2.decode(GLOBAL_PD_SCHEMA, data)
-    local modules = global_pd.modules
-    global_playerData[pn] = global_pd
-
-    local encoded_module_pd = nil
-    for i = 1, #modules do
-        if modules[i].id == MODULE_ID then
-            encoded_module_pd = modules[i].encoded
-            break
-        end
-    end
-    if encoded_module_pd then
-        playerData[pn] = db2.decode(MODULE_PD_SCHEMA, encoded_module_pd)
-        print("load existing "..pn)
-    end
-end
-
 ----- EVENTS
 function eventChatCommand(pn, msg)
     local words = string_split(string.lower(msg), "%s")
@@ -1442,14 +1464,14 @@ end
 
 function eventPlayerDataLoaded(pn, data)
     if #data > 0 then
-        local success, result = pcall(LoadPlayerData, pn, data)
+        local success, result = pcall(PDHelper.load, pn, data)
         if not success then
             print(string.format("Exception encountered in eventPlayerDataLoaded: %s", result))
         else
             pd_loaded[pn] = true
         end
     end
-    local success, result = pcall(SavePlayerData, pn)  -- TODO: to remove, for testing only
+    local success, result = pcall(PDHelper.save, pn)  -- TODO: to remove, for testing only
     if not success then
         print(string.format("Exception encountered in eventPlayerDataLoaded: %s", result))
     end
@@ -1463,6 +1485,7 @@ end
 
 function eventLoop(elapsed, remaining)
     map_sched.run()
+    PDHelper.checkSaves()
     if next_module_sync and os.time() >= next_module_sync then
         system.loadFile(FILE_NUMBER)
         next_module_sync = os.time() + FILE_LOAD_INTERVAL

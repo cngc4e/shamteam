@@ -1,11 +1,48 @@
+# General/common
+close = [[Close]] # Needs translation
+
 # Help window
-help_welcome = [[
+help_tab_welcome = [[Welcome]] # Needs translation
+help_tab_rules = [[Rules]] # Needs translation
+help_tab_commands = [[Commands]] # Needs translation
+help_tab_contributors = [[Contributors]] # Needs translation
+
+help_content_welcome = [[
 <p align="center"><J><font size='14'><b>欢迎来到#ShamTeam</b></font></p>
 <p align="left"><font size='12'><N>欢迎来到Team Shaman Mode (TSM)! TSM的游戏过程很简单：您将与另一个萨满配对，并轮流生成对象。您可以根据所保存的鼠标在回合结束时获得积分。但小心点！如果您在轮到自己或垂死时产卵而犯错，您和您的伴侣将失去积分！您将可以使用一些修饰符，使您的游戏更具挑战性，如果您赢得本轮比赛，您的得分将相应地成倍增长。
 
 加入我们的Discord服务器以获取帮助和更多信息！
 网址: %s<a href="event:link!%s">discord.gg/YkzM4rh</a>
 ]]
+
+help_content_rules = [[
+<p align="center"><J><font size='14'><b>Rules</b></font></p>
+<p align="left"><font size='12'><N>- In hard mode, you must be within your partner's spawning range for a successful spawn.
+- In divine mode, using arrows deduct points.
+- Only up to 3 solid balloons may be used.
+- Spawning an object while it is not your turn will result in points deduction.
+]] # Needs translation
+
+help_content_commands = [[
+<p align="center"><J><font size='14'><b>Commands</b></font></p>
+<p align="left"><font size='12'><N>!m/!mort - kills yourself
+!afk - mark yourself as a spectator
+!pair [player] - request to pair up with a player
+!cancel - cancels existing forced pairing or pairing request
+
+!stats [player] - view your stats or another player’s
+]] # Needs translation
+
+help_content_contributors = [[
+<p align="center"><J><font size='14'><b>Contributors</b></font></p>
+<p align="left"><font size='12'><N>#shamteam is brought to you by the Academy of Building! It would not be possible without the following people:
+
+<J>Casserole#1798<N> - Developer
+<J>Emeryaurora#0000<N> - Module designer & original concept maker
+<J>Pegasusflyer#0000<N> - Module designer
+
+A full list of staff are available via the !staff command.
+]] # Needs translation
 
 # Chat messages
 unafk_message = [[欢迎回来！]]

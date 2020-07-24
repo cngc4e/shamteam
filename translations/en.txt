@@ -1,10 +1,47 @@
+# General/common
+close = [[Close]]
+
 # Help window
-help_welcome = [[
+help_tab_welcome = [[Welcome]]
+help_tab_rules = [[Rules]]
+help_tab_commands = [[Commands]]
+help_tab_contributors = [[Contributors]]
+
+help_content_welcome = [[
 <p align="center"><J><font size='14'><b>Welcome to #ShamTeam</b></font></p>
 <p align="left"><font size='12'><N>Welcome to Team Shaman Mode (TSM)! The gameplay of TSM is simple: You will pair with another shaman and take turns spawning objects. You earn points at the end of the round depending on mice saved. But be careful! If you make a mistake by spawning when it's not your turn, or dying, you and your partner will lose points! There will be mods that you can enable to make your gameplay a little bit more challenging, and should you win the round, your score will be multiplied accordingly.
 
 Join our discord server for help and more information!
 Link: %s<a href="event:link!%s">discord.gg/YkzM4rh</a>
+]]
+
+help_content_rules = [[
+<p align="center"><J><font size='14'><b>Rules</b></font></p>
+<p align="left"><font size='12'><N>- In hard mode, you must be within your partner's spawning range for a successful spawn.
+- In divine mode, using arrows deduct points.
+- Only up to 3 solid balloons may be used.
+- Spawning an object while it is not your turn will result in points deduction.
+]]
+
+help_content_commands = [[
+<p align="center"><J><font size='14'><b>Commands</b></font></p>
+<p align="left"><font size='12'><N>!m/!mort - kills yourself
+!afk - mark yourself as a spectator
+!pair [player] - request to pair up with a player
+!cancel - cancels existing forced pairing or pairing request
+
+!stats [player] - view your stats or another player’s
+]]
+
+help_content_contributors = [[
+<p align="center"><J><font size='14'><b>Contributors</b></font></p>
+<p align="left"><font size='12'><N>#shamteam is brought to you by the Academy of Building! It would not be possible without the following people:
+
+<J>Casserole#1798<N> - Developer
+<J>Emeryaurora#0000<N> - Module designer & original concept maker
+<J>Pegasusflyer#0000<N> - Module designer
+
+A full list of staff are available via the !staff command.
 ]]
 
 # Chat messages
