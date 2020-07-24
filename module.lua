@@ -5,6 +5,8 @@
 local translations = {}
 local players = {}  -- module room player data
 local playerData = {}  -- module persistent player data
+local global_playerData = {}  -- full player data (per lua dev)
+local pd_loaded = {}  -- table of bool flags denoting players in which have successfully loadaed data
 local roundv = {}  -- data spanning the lifetime of the round
 local new_game_vars = {}  -- data spanning the lifetime till the next eventNewGame
 local db_cache = {}
@@ -111,22 +113,44 @@ local TSM_DIV = 2
 local DEFAULT_MAX_PLAYERS = 50
 
 -- File number (this is per-Lua dev, change it accordingly and careful not to let your data get overridden!)
-local FILE_NUMBER = 2
+local MODULE_ID = 2
+local FILE_NUMBER = MODULE_ID
 local FILE_LOAD_INTERVAL = 60005  -- in milliseconds
 
--- DB2 Schemas
-local mod_schema = {
+-- Module data
+local MOD_SCHEMA = {
     [1] = {
         VERSION = 1,
-        db2.VarDataList{key="maps", size=4000, datatype=db2.Object{schema={
-            db2.UnsignedInt{key="code", size=4},
-            db2.UnsignedInt{key="hard", size=1},
-            db2.UnsignedInt{key="div", size=1},
+        db2.VarDataList{ key="maps", size=4000, datatype=db2.Object{schema={
+            db2.UnsignedInt{ key="code", size=4 },
+            db2.UnsignedInt{ key="hard", size=1 },
+            db2.UnsignedInt{ key="div", size=1 },
         }}},
     }
 }
--- 
 local LATEST_MOD_VER = 1
+
+-- Global player data structure
+local GLOBAL_PD_SCHEMA = {
+    db2.VarDataList{ key="modules", size=128, datatype=db2.Object{schema={
+        db2.UnsignedInt{ key="id", size=1 },
+        db2.VarChar{ key="encoded", size=2097152 },
+    }}},
+}
+
+-- Nested module-specific player data structure
+local MODULE_PD_SCHEMA = {
+    db2.UnsignedInt{ key="exp", size=4 },  -- experience points
+    db2.UnsignedInt{ key="toggles", size=4 },  -- player options bit set (togglebles)
+}
+
+local DEFAULT_PD = {
+    exp = 0,
+    toggles = 0,
+}
+-- Toggles enabled by default
+DEFAULT_PD.toggles = bor(DEFAULT_PD.toggles, OPT_GUI)
+DEFAULT_PD.toggles = bor(DEFAULT_PD.toggles, OPT_CIRCLE)
 
 -- Others
 local staff = {["Cass11337#8417"]=true, ["Emeryaurora#0000"]=true, ["Pegasusflyer#0000"]=true, ["Tactcat#0000"]=true, ["Leafileaf#0000"]=true, ["Rini#5475"]=true, ["Rayallan#0000"]=true, ["Shibbbbbyy#1143"]=true}
@@ -144,14 +168,6 @@ local options = {
     [OPT_GUI] = {"Show GUI", "Whether to show or hide the help menu, player settings and profile buttons on-screen."},
     [OPT_CIRCLE] = {"Show partner's range", "Toggles an orange circle that shows the spawning range of your partner in Team Hard Mode."},
 }
-
-local default_playerData = {
-    toggles = 0,
-}
-
--- Toggles enabled by default
-default_playerData.toggles = bor(default_playerData.toggles, OPT_GUI)
-default_playerData.toggles = bor(default_playerData.toggles, OPT_CIRCLE)
 
 ----- Forward declarations (local)
 local keys, cmds, cmds_alias, callbacks, sWindow, GetExpMult, SetSpectate, UpdateCircle
@@ -176,21 +192,6 @@ local function table_copy(tbl)
         out[k] = v
     end
     return out
-end
-
--- iterate over a key-value pair table, skipping the "_len" key
-local function cnext(tbl, k)
-    local v
-    k, v = next(tbl, k)
-    if k~="_len" then 
-        return k,v
-    else
-        k, v = next(tbl, k)
-        return k,v
-    end
-end
-local function cpairs(tbl)
-    return cnext, tbl, nil
 end
 
 local function tl(name, lang)
@@ -471,13 +472,7 @@ do
                 p_data.tab = tab
 
                 if tab == "Welcome" then
-                    local text = string.format([[
-<p align="center"><J><font size='14'><b>Welcome to #ShamTeam</b></font></p>
-<p align="left"><font size='12'><N>Welcome to Team Shaman Mode (TSM)! The gameplay of TSM is simple: You will pair with another shaman and take turns spawning objects. You earn points at the end of the round depending on mice saved. But be careful! If you make a mistake by spawning when it's not your turn, or dying, you and your partner will lose points! There will be mods that you can enable to make your gameplay a little bit more challenging, and should you win the round, your score will be multiplied accordingly.
-
-Join our discord server for help and more information!
-Link: %s<a href="event:link!%s">discord.gg/YkzM4rh</a>
-                    ]], GUI_BTN, LINK_DISCORD)
+                    local text = string.format(tl("help_welcome", players[pn].lang), GUI_BTN, LINK_DISCORD)
                     ui.addTextArea(WINDOW_HELP+21,text,pn,88,95,625,nil,0,0,0,true)
                 elseif tab == "Rules" then
                     local text = [[
@@ -1073,7 +1068,7 @@ callbacks = {
     end,
     unafk = function(pn)
         SetSpectate(pn, false)
-        tfm.exec.chatMessage("<ROSE>"..tl("unafk", players[pn].lang), pn)
+        tfm.exec.chatMessage(tl("unafk_message", players[pn].lang), pn)
     end,
     link = function(pn, link_id)
         -- Do not print out raw text from players! Use predefined IDs instead.
@@ -1369,8 +1364,53 @@ local UpdateMapCodes = function()
 end
 
 local SyncModuleData = function(data)
-    db_cache = db2.decode(mod_schema, data)
+    db_cache = db2.decode(MOD_SCHEMA, data)
     UpdateMapCodes()
+end
+
+local SavePlayerData = function(pn)
+    local global_pd = global_playerData[pn]
+    local modules = global_pd.modules
+    local found = nil
+    for i = 1, #modules do
+        if modules[i].id == MODULE_ID then
+            found = modules[i]
+            break
+        end
+    end
+    local encoded_module_pd = db2.encode(MODULE_PD_SCHEMA, playerData[pn])
+    if found then
+        -- Existing module specific player data, just update it
+        found.encoded = encoded_module_pd
+        print("save existing "..pn)
+    else
+        -- Initialise fresh module specific player data
+        modules[#modules+1] = {
+            id = MODULE_ID,
+            encoded = encoded_module_pd
+        }
+        print("save new "..pn)
+    end
+    local encoded_global_pd = db2.encode(GLOBAL_PD_SCHEMA, global_pd)
+    system.savePlayerData(pn, encoded_global_pd)
+end
+
+local LoadPlayerData = function(pn, data)
+    local global_pd = db2.decode(GLOBAL_PD_SCHEMA, data)
+    local modules = global_pd.modules
+    global_playerData[pn] = global_pd
+
+    local encoded_module_pd = nil
+    for i = 1, #modules do
+        if modules[i].id == MODULE_ID then
+            encoded_module_pd = modules[i].encoded
+            break
+        end
+    end
+    if encoded_module_pd then
+        playerData[pn] = db2.decode(MODULE_PD_SCHEMA, encoded_module_pd)
+        print("load existing "..pn)
+    end
 end
 
 ----- EVENTS
@@ -1397,6 +1437,21 @@ function eventFileLoaded(file, data)
         print(string.format("Exception encountered in eventFileLoaded: %s", result))
     else
         module_data_loaded = true
+    end
+end
+
+function eventPlayerDataLoaded(pn, data)
+    if #data > 0 then
+        local success, result = pcall(LoadPlayerData, pn, data)
+        if not success then
+            print(string.format("Exception encountered in eventPlayerDataLoaded: %s", result))
+        else
+            pd_loaded[pn] = true
+        end
+    end
+    local success, result = pcall(SavePlayerData, pn)  -- TODO: to remove, for testing only
+    if not success then
+        print(string.format("Exception encountered in eventPlayerDataLoaded: %s", result))
     end
 end
 
@@ -1582,7 +1637,7 @@ function eventNewPlayer(pn)
         group = GROUP_PLAYER,
         internal_score = 0,
     }
-    playerData[pn] = table_copy(default_playerData)  -- temp until database done
+
     if translations[p.community] then
         players[pn].lang = p.community
     end
@@ -1594,6 +1649,10 @@ function eventNewPlayer(pn)
     elseif room.name:find(ZeroTag(pn)) or (p.tribeName and room.name:find(p.tribeName)) then
         players[pn].group = GROUP_ADMIN
     end
+
+    playerData[pn] = table_copy(DEFAULT_PD)
+    global_playerData[pn] = {modules={}}
+    system.loadPlayerData(pn)
 
     system.bindMouse(pn, true)
     for key, a in pairs(keys) do

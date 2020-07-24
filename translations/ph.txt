@@ -1,1 +1,0 @@
-unafk = "Maligayang pagbabalik!"

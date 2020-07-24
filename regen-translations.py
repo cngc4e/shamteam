@@ -11,14 +11,14 @@ for path in files:
         lang = os.path.splitext(os.path.basename(path))[0]
         pairs = {}
         # match key value pairs and add them to pairs unless they have a "Needs translation" comment
-        for m in re.findall(r"(\S+)\s*=\s*\"((?:\\.|[^\"\\])*)\"(?!\s*# Needs translation)", content):
+        for m in re.findall(r"(\S+)\s*=\s*\[\[([\S\s]*?)\]\](?!\s*# Needs translation)", content):
             key = m[0]
             val = m[1]
             pairs.update({key: val})
 
         translations.update({lang: pairs})
 base_stream = open("translations/"+BASE_LANG+".txt", "r", encoding="utf-8")
-base_lines = base_stream.readlines()
+base_lines = base_stream.read().splitlines()
 for lang in translations:
     if lang == BASE_LANG:
         continue
@@ -26,15 +26,21 @@ for lang in translations:
     print("start writing")
     os.remove("translations/"+lang+".txt")
     target_lang = open("translations/"+lang+".txt", "a", encoding="utf-8")
+    ignore = False
     for line in base_lines:
-        m = re.search(r"(\S+)\s*=\s*\"((?:\\.|[^\"\\])*)\"", line)
+        if ignore:
+            if "]]" in line:
+                ignore = False
+            continue
+        m = re.search(r"(\S+)\s*=", line)
         if m:
+            if not "]]" in line:
+                ignore = True
             key = m.group(1)
-            val = m.group(2)
             if key in translations[lang]:
-                target_lang.write("{} = \"{}\"\n".format(key, translations[lang][key]))
+                target_lang.write("{} = [[{}]]\n".format(key, translations[lang][key]))
             else:
-                target_lang.write("{} = \"{}\" # Needs translation\n".format(key, translations[BASE_LANG][key]))
+                target_lang.write("{} = [[{}]] # Needs translation\n".format(key, translations[BASE_LANG][key]))
         else:
             target_lang.write(line+"\n")
     target_lang.close()

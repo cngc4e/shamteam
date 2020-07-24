@@ -1,1 +1,11 @@
-unafk = "Welcome back! We've been expecting you."
+# Help window
+help_welcome = [[
+<p align="center"><J><font size='14'><b>Welcome to #ShamTeam</b></font></p>
+<p align="left"><font size='12'><N>Welcome to Team Shaman Mode (TSM)! The gameplay of TSM is simple: You will pair with another shaman and take turns spawning objects. You earn points at the end of the round depending on mice saved. But be careful! If you make a mistake by spawning when it's not your turn, or dying, you and your partner will lose points! There will be mods that you can enable to make your gameplay a little bit more challenging, and should you win the round, your score will be multiplied accordingly.
+
+Join our discord server for help and more information!
+Link: %s<a href="event:link!%s">discord.gg/YkzM4rh</a>
+]]
+
+# Chat messages
+unafk_message = [[<ROSE>Welcome back! We've been expecting you.]]

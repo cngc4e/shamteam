@@ -1,7 +1,7 @@
 import re
 import os
 import glob
-import pathlib
+import shutil
 
 template = open("module.lua", "r", encoding="utf-8").read()
 
@@ -28,6 +28,8 @@ def expand(content):
         return content
 
 # build translations
+shutil.rmtree("translations-gen")
+os.mkdir("translations-gen")
 files = glob.glob("translations/*.txt")
 for path in files:
     with open(path, "r", encoding="utf-8") as f:
@@ -35,15 +37,12 @@ for path in files:
         lang = os.path.splitext(os.path.basename(path))[0]
         wrt = "translations.{} = {{\n".format(lang)
         pairs = []
-        for m in re.findall(r"(\S+)\s*=\s*\"((?:\\.|[^\"\\])*)\"", content):
+        for m in re.findall(r"(\S+)\s*=\s*\[\[([\S\s]*?)\]\]", content):
             key = m[0]
-            val = m[1]
+            val = m[1].strip().replace('\n', '\\n').replace('"', '\\"')
             pairs.append("\t{}=\"{}\"".format(key, val))
         wrt += ",\n".join(pairs)
         wrt += "\n}"
-        #print(wrt)
-        # create dir if it doesnt exist
-        pathlib.Path("translations-gen").mkdir(parents=True, exist_ok=True)
         with open("translations-gen/{}.lua".format(lang), "w", encoding="utf-8") as fw:
             fw.write(wrt)
 

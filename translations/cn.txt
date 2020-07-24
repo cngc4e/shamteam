@@ -1,1 +1,11 @@
-unafk = "欢迎回来！"
+# Help window
+help_welcome = [[
+<p align="center"><J><font size='14'><b>欢迎来到#ShamTeam</b></font></p>
+<p align="left"><font size='12'><N>欢迎来到Team Shaman Mode (TSM)! TSM的游戏过程很简单：您将与另一个萨满配对，并轮流生成对象。您可以根据所保存的鼠标在回合结束时获得积分。但小心点！如果您在轮到自己或垂死时产卵而犯错，您和您的伴侣将失去积分！您将可以使用一些修饰符，使您的游戏更具挑战性，如果您赢得本轮比赛，您的得分将相应地成倍增长。
+
+加入我们的Discord服务器以获取帮助和更多信息！
+网址: %s<a href="event:link!%s">discord.gg/YkzM4rh</a>
+]]
+
+# Chat messages
+unafk_message = [[欢迎回来！]]
