@@ -5,7 +5,6 @@
 local translations = {}
 local players = {}  -- module room player data
 local playerData = {}  -- module persistent player data
-local global_playerData = {}  -- full player data (per lua dev)
 local pd_loaded = {}  -- table of bool flags denoting players in which have successfully loadaed data
 local roundv = {}  -- data spanning the lifetime of the round
 local new_game_vars = {}  -- data spanning the lifetime till the next eventNewGame
@@ -141,9 +140,13 @@ local GLOBAL_PD_SCHEMA = {
 
 -- Nested module-specific player data structure
 local MODULE_PD_SCHEMA = {
-    db2.UnsignedInt{ key="exp", size=4 },  -- experience points
-    db2.UnsignedInt{ key="toggles", size=4 },  -- player options bit set (togglebles)
+    [1] = {
+        VERSION = 1,
+        db2.UnsignedInt{ key="exp", size=4 },  -- experience points
+        db2.UnsignedInt{ key="toggles", size=4 },  -- player options bit set (togglebles)
+    }
 }
+local LATEST_PD_VER = 1
 
 local DEFAULT_PD = {
     exp = 0,
@@ -282,15 +285,40 @@ end
 local PDHelper
 do
     local save_at = {}
+    local PDOps = {}
 
-    local schedule_save = function(pn)
+    ----- Player data methods
+    --- Module specific
+    local function set_toggle(self, toggle_id, on)
+        if on == nil then
+            on = true
+        end
+        local pd = self.module_pd
+        local op = on and bor or bnot
+        pd.toggles = op(pd.toggles, toggle_id)
+    end
+
+    local function flip_toggle(self, toggle_id)
+        local pd = self.module_pd
+        pd.toggles = bxor(pd.toggles, toggle_id)
+    end
+
+    local function get_toggle(self, toggle_id)
+        local pd = self.module_pd
+        return band(pd.toggles, toggle_id) ~= 0
+    end
+
+    --- Saving / Loading
+    local schedule_save = function(self)
+        local pn = self.pn
         if not save_at[pn] then
             save_at[pn] = os.time() + SAVE_PD_WAITTIME
         end
     end
 
-    local save_now = function(pn)
-        local global_pd = global_playerData[pn]
+    local save_now = function(self)
+        local global_pd = self.global_pd
+        local pn = self.pn
         local modules = global_pd.modules
         local found = nil
         for i = 1, #modules do
@@ -299,7 +327,7 @@ do
                 break
             end
         end
-        local encoded_module_pd = db2.encode(MODULE_PD_SCHEMA, playerData[pn])
+        local encoded_module_pd = db2.encode(MODULE_PD_SCHEMA[LATEST_PD_VER], self.module_pd)
         if found then
             -- Existing module specific player data, just update it
             found.encoded = encoded_module_pd
@@ -316,10 +344,11 @@ do
         system.savePlayerData(pn, encoded_global_pd)
     end
 
-    local load_now = function(pn, data)
+    local load_now = function(self, data)
+        local pn = self.pn
         local global_pd = db2.decode(GLOBAL_PD_SCHEMA, data)
         local modules = global_pd.modules
-        global_playerData[pn] = global_pd
+        self.global_pd = global_pd
     
         local encoded_module_pd = nil
         for i = 1, #modules do
@@ -329,9 +358,21 @@ do
             end
         end
         if encoded_module_pd then
-            playerData[pn] = db2.decode(MODULE_PD_SCHEMA, encoded_module_pd)
+            self.module_pd = db2.decode(MODULE_PD_SCHEMA, encoded_module_pd)
             print("load existing "..pn)
         end
+    end
+
+    ----- Helper methods
+    local new = function(pn, default_pd)
+        local data = {
+            pn = pn,
+            global_pd = {
+                modules = {}
+            },
+            module_pd = default_pd,
+        }
+        return setmetatable(data, PDOps)
     end
 
     local check_saves = function()
@@ -339,7 +380,7 @@ do
         local yeetaway = { _len=0 }
         for name, at in pairs(save_at) do
             if now >= at then
-                save_now(name)
+                save_now(playerData[name])
                 yeetaway[yeetaway._len + 1] = name
                 yeetaway._len = yeetaway._len + 1
             end
@@ -349,10 +390,18 @@ do
         end
     end
 
-    PDHelper = {
+    PDOps = {
+        setToggle = set_toggle,
+        flipToggle = flip_toggle,
+        getToggle = get_toggle,
         scheduleSave = schedule_save,
         save = save_now,
         load = load_now,
+    }
+    PDOps.__index = PDOps
+
+    PDHelper = {
+        new = new,
         checkSaves = check_saves,
     }
 end
@@ -681,7 +730,7 @@ do
                 local i = 1
                 for k, opt in pairs(options) do
                     opts_str[#opts_str+1] = string.format("<a href='event:opttoggle!%s'>%s", k, opt[1])
-                    local is_set = band(playerData[pn].toggles, k) ~= 0
+                    local is_set = playerData[pn]:getToggle(k)
                     local x, y = 716, 100+((i-1)*25)
                     p_data.images.toggle[k] = {tfm.exec.addImage(is_set and IMG_TOGGLE_ON or IMG_TOGGLE_OFF, ":"..WINDOW_OPTIONS, x, y, pn), x, y}
                     
@@ -1240,9 +1289,9 @@ callbacks = {
         if not opt_id or not options[opt_id] or not roundv.running then
             return
         end
-        playerData[pn].toggles = bxor(playerData[pn].toggles, opt_id)  -- flip and toggle the flag
+        playerData[pn]:flipToggle(opt_id)  -- flip and toggle the flag
         
-        local is_set = band(playerData[pn].toggles, opt_id) ~= 0
+        local is_set = playerData[pn]:getToggle(opt_id)
 
         local imgs = sWindow.getImages(WINDOW_OPTIONS, pn)
         local img_dats = imgs.toggle
@@ -1269,7 +1318,7 @@ callbacks = {
         end
 
         -- Schedule saving
-        PDHelper.scheduleSave(pn)
+        playerData[pn]:scheduleSave()
     end,
     opthelp = function(pn, opt_id)
         opt_id = tonumber(opt_id) or -1
@@ -1402,7 +1451,7 @@ UpdateCircle = function()
         if roundv.circle then
             tfm.exec.removeImage(roundv.circle)
         end
-        if band(playerData[display_to].toggles, OPT_CIRCLE) ~= 0 then
+        if playerData[display_to]:getToggle(OPT_CIRCLE) then
             roundv.circle = tfm.exec.addImage(IMG_RANGE_CIRCLE, "$"..display_for, -120, -120, display_to)
         else
             tfm.exec.removeImage(roundv.circle)
@@ -1463,15 +1512,16 @@ function eventFileLoaded(file, data)
 end
 
 function eventPlayerDataLoaded(pn, data)
+    local pd = playerData[pn]
     if #data > 0 then
-        local success, result = pcall(PDHelper.load, pn, data)
+        local success, result = pcall(pd.load, pd, data)
         if not success then
             print(string.format("Exception encountered in eventPlayerDataLoaded: %s", result))
         else
             pd_loaded[pn] = true
         end
     end
-    local success, result = pcall(PDHelper.save, pn)  -- TODO: to remove, for testing only
+    local success, result = pcall(pd.save, pd, pn)  -- TODO: to remove, for testing only
     if not success then
         print(string.format("Exception encountered in eventPlayerDataLoaded: %s", result))
     end
@@ -1575,7 +1625,7 @@ function eventNewGame()
             -- show back the GUI for the previous round of shamans
             for i = 1, #new_game_vars.previous_round.shamans do
                 local name = new_game_vars.previous_round.shamans[i]
-                if band(playerData[name].toggles, OPT_GUI) ~= 0 then
+                if playerData[name]:getToggle(OPT_GUI) then
                     sWindow.open(WINDOW_GUI, name)
                 end
             end
@@ -1673,8 +1723,7 @@ function eventNewPlayer(pn)
         players[pn].group = GROUP_ADMIN
     end
 
-    playerData[pn] = table_copy(DEFAULT_PD)
-    global_playerData[pn] = {modules={}}
+    playerData[pn] = PDHelper.new(pn, table_copy(DEFAULT_PD))
     system.loadPlayerData(pn)
 
     system.bindMouse(pn, true)
@@ -1700,7 +1749,7 @@ function eventNewPlayer(pn)
 
     tfm.exec.setPlayerScore(pn, 0)
 
-    if band(playerData[pn].toggles, OPT_GUI) ~= 0 then
+    if playerData[pn]:getToggle(OPT_GUI) then
         sWindow.open(WINDOW_GUI, pn)
     end
     if roundv.lobby then
@@ -1758,7 +1807,7 @@ function eventSummoningEnd(pn, type, xPos, yPos, angle, desc)
     end
     if roundv.startsummon then  -- workaround b/2: map prespawned object triggers summoning end event
         -- AntiLag™ by Leafileaf
-        if band(playerData[pn].toggles, OPT_ANTILAG) ~= 0 and desc.baseType ~= 17 and desc.baseType ~= 32 then
+        if playerData[pn]:getToggle(OPT_ANTILAG) and desc.baseType ~= 17 and desc.baseType ~= 32 then
             tfm.exec.moveObject(desc.id, xPos, yPos, false, 0, 0, false, angle, false)
         end
         if not roundv.lobby then
@@ -1809,8 +1858,8 @@ function eventSummoningEnd(pn, type, xPos, yPos, angle, desc)
             if ping >= ANTILAG_FORCE_THRESHOLD then
                 -- enable antilag
                 tfm.exec.chatMessage("<ROSE>Hey there, you appear to be really laggy. We have enabled AntiLag for you.", pn)
-                playerData[pn].toggles = bor(playerData[pn].toggles, OPT_ANTILAG)
-            elseif ping >= ANTILAG_WARN_THRESHOLD and band(playerData[pn].toggles, OPT_ANTILAG) == 0 then
+                playerData[pn]:setToggle(OPT_ANTILAG, true)
+            elseif ping >= ANTILAG_WARN_THRESHOLD and not playerData[pn]:getToggle(OPT_ANTILAG) then
                 -- enable antilag if it isn't already so
                 tfm.exec.chatMessage("<ROSE>Hey there, you appear to have lagged. You should consider enabling AntiLag via the options menu (press O).", pn)
             end
