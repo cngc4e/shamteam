@@ -826,26 +826,265 @@ do
 	db2.lntb = lntb
 end
 
--- File number (this is per-Lua dev, careful not to let your data get overridden!)
-local FILE_NUMBER = 2
+local function table_copy(tbl)
+    local out = {}
+    for k, v in next, tbl do
+        out[k] = v
+    end
+    return out
+end
+local function dumptbl (tbl, indent)
+    if not indent then indent = 0 end
+    for k, v in pairs(tbl) do
+      formatting = string.rep("  ", indent) .. k .. ": "
+      if type(v) == "table" then
+        print(formatting)
+        dumptbl(v, indent+1)
+      elseif type(v) == 'boolean' then
+        print(formatting .. tostring(v))      
+      else
+        print(formatting .. v)
+      end
+    end
+end
 
--- DB2 Schemas
-local mod_schema = {
-    [1] = {
-        VERSION = 1,
-        db2.VarDataList{key="maps", size=4000, datatype=db2.Object{schema={
-            db2.UnsignedInt{key="code", size=4},
-            db2.UnsignedInt{key="hard", size=1},
-            db2.UnsignedInt{key="div", size=1},
-        }}},
+-- Module ID (this is per-Lua dev, careful not to let your data get overridden!)
+local MODULE_ID = 2
+
+-- Module data helper
+local MDHelper = {}
+do
+    local FILE_NUMBER = MODULE_ID
+    local FILE_LOAD_INTERVAL = 60005  -- in milliseconds
+    local LATEST_MD_VER = 1
+
+    local db_cache = {}
+    local db_commits = {}
+    local module_data_loaded = false
+    local next_module_sync = nil  -- when the next module data syncing can occur
+
+    -- DB operations/commits
+    MDHelper.OP_ADD_MAP = 1
+    MDHelper.OP_REMOVE_MAP = 2
+    MDHelper.OP_UPDATE_MAP_HARD = 3
+    MDHelper.OP_UPDATE_MAP_DIV = 4
+    MDHelper.OP_ADD_MAP_COMPLETION = 5
+    MDHelper.OP_ADD_BAN = 6
+    MDHelper.OP_REMOVE_BAN = 7
+    MDHelper.OP_REPLACE_MAPS = 8
+
+    -- Module data DB2 schemas
+    local MD_SCHEMA = {
+        [1] = {
+            VERSION = 1,
+            db2.VarDataList{ key="maps", size=10000, datatype=db2.Object{schema={
+                db2.UnsignedInt{ key="code", size=4 },
+                db2.UnsignedInt{ key="hard_diff", size=1 },
+                db2.UnsignedInt{ key="div_diff", size=1 },
+                db2.UnsignedInt{ key="completed", size=5 },
+                db2.UnsignedInt{ key="rounds", size=5 },
+            }}},
+            db2.VarDataList{ key="banned", size=1000, datatype=db2.Object{schema={
+                db2.VarChar{ key="name", size=25 },
+                db2.VarChar{ key="reason", size=100 },
+                db2.UnsignedInt{ key="time", size=5 },  -- in seconds
+            }}},
+            db2.VarDataList{ key="module_log", size=1000, datatype=db2.Object{schema={
+                db2.VarChar{ key="committer", size=25 },
+                db2.Switch{ key="op", typekey = "op_id", typedatatype = db2.UnsignedInt{ size = 2 }, datatypemap = {
+                    [MDHelper.OP_ADD_MAP] = db2.Object{schema={
+                        db2.UnsignedInt{ key="code", size=4 },
+                    }},
+                    [MDHelper.OP_REMOVE_MAP] = db2.Object{schema={
+                        db2.UnsignedInt{ key="code", size=4 },
+                    }},
+                    [MDHelper.OP_UPDATE_MAP_HARD] = db2.Object{schema={
+                        db2.UnsignedInt{ key="diff", size=1 },
+                    }},
+                    [MDHelper.OP_UPDATE_MAP_DIV] = db2.Object{schema={
+                        db2.UnsignedInt{ key="diff", size=1 },
+                    }},
+                    [MDHelper.OP_ADD_BAN] = db2.Object{schema={
+                        db2.VarChar{ key="name", size=25 },
+                    }},
+                    [MDHelper.OP_REMOVE_BAN] = db2.Object{schema={
+                        db2.VarChar{ key="name", size=25 },
+                    }},
+                    [MDHelper.OP_REPLACE_MAPS] = db2.Object{schema={}},
+                }},
+            }}},
+        }
     }
-}
 
-local maps = {{code=1852359, hard=4, div=3},{code=294822, hard=2, div=0},{code=1289915, hard=1, div=0},{code=1236698, hard=1, div=1},{code=3587523, hard=2, div=3},{code=6114320, hard=0, div=2},{code=2611862, hard=3, div=3},{code=3292713, hard=4, div=4},{code=5479449, hard=3, div=2},{code=1287411, hard=3, div=3},{code=3833268, hard=3, div=3},{code=6244577, hard=1, div=2},{code=6400012, hard=3, div=3},{code=3630912, hard=3, div=3},{code=5417400, hard=3, div=3},{code=6684914, hard=0, div=1},{code=7294988, hard=3, div=4},{code=2183071, hard=1, div=1},{code=2187511, hard=2, div=3},{code=3518304, hard=1, div=1},{code=473464, hard=1, div=2},{code=4730674, hard=4, div=3},{code=2116888, hard=4, div=4},{code=586103, hard=2, div=4},{code=3376768, hard=3, div=3},{code=2670753, hard=2, div=3},{code=1593943, hard=3, div=4},{code=387529, hard=5, div=5},{code=7747230, hard=4, div=4},{code=653426, hard=2, div=3},{code=4113708, hard=2, div=3},{code=6328976, hard=1, div=1},{code=7747641, hard=2, div=4},{code=7747649, hard=3, div=4},{code=7747238, hard=5, div=5},{code=3688810, hard=2, div=3},{code=4066292, hard=2, div=3},{code=7747241, hard=3, div=2},{code=7749467, hard=3, div=3},{code=7749472, hard=5, div=5},{code=7748557, hard=4, div=4},{code=6727382, hard=3, div=2},{code=5978741, hard=2, div=2},{code=7749479, hard=1, div=1},{code=7749488, hard=2, div=3},{code=6518642, hard=2, div=2},{code=7746353, hard=3, div=4},{code=7746357, hard=5, div=5},{code=7746359, hard=2, div=2},{code=1597117, hard=2, div=2},}
-local db = {maps=maps}
+    local default_db = {
+        maps = {},
+        banned = {},
+        module_log = {},
+    }
 
-system.saveFile(db2.encode(mod_schema[1],db), FILE_NUMBER)
+    local operations = {
+        [MDHelper.OP_ADD_MAP] = {
+            init = function(self, map)
+                self.map = map
+            end,
+            merge = function(self, db)
+            end,
+        },
+        [MDHelper.OP_REMOVE_MAP] = {
+            init = function(self, map)
+                self.map = map
+            end,
+            merge = function(self, db)
+            end,
+        },
+        [MDHelper.OP_UPDATE_MAP_HARD] = {
+            init = function(self, diff)
+                self.diff = diff
+            end,
+            merge = function(self, db)
+            end,
+        },
+        [MDHelper.OP_UPDATE_MAP_DIV] = {
+            init = function(self, diff)
+                self.diff = diff
+            end,
+            merge = function(self, db)
+            end,
+        },
+        [MDHelper.OP_ADD_MAP_COMPLETION] = {
+            init = function(self, completed)
+                self.completed = completed
+            end,
+            merge = function(self, db)
+            end,
+        },
+        [MDHelper.OP_ADD_BAN] = {
+            init = function(self, pn)
+                self.pn = pn
+            end,
+            merge = function(self, db)
+            end,
+        },
+        [MDHelper.OP_REMOVE_BAN] = {
+            init = function(self, pn)
+                self.map = map
+            end,
+            merge = function(self, db)
+            end,
+        },
+        [MDHelper.OP_REPLACE_MAPS] = {
+            init = function(self, map_table)
+				self.map_table = map_table
+            end,
+            merge = function(self, db)
+				db.maps = self.map_table
+            end,
+        },
+    }
+
+    local get_maps = function()
+        return db_cache.maps
+    end
+
+    local commit = function(pn, op_id, a1, a2, a3, a4)
+        local op = operations[op_id]
+        if op then
+            local op_mt = setmetatable({}, { __index = {
+                init = op.init,
+                merge = op.merge
+            }})
+            op_mt:init(a1, a2, a3, a4)
+            op_mt:merge(db_cache)
+            db_commits[#db_commits+1] = op_mt
+        else
+            return error("Invalid operation.")
+        end
+    end
+
+    local save = function(db)
+        local encoded_md = db2.encode(MD_SCHEMA[LATEST_MD_VER], db)
+        system.saveFile(encoded_md, FILE_NUMBER)
+        print("module data save")
+    end
+
+    local parse = function(file, data)
+        if tonumber(file) ~= FILE_NUMBER then return end
+        local data_sz = #data
+        local new_db = data_sz > 0 and db2.decode(MD_SCHEMA, data) or default_db
+        local commit_sz = #db_commits
+		if data_sz == 0 then
+			print("init and save default db")
+			save(new_db)
+		elseif commit_sz > 0 then
+			for i = 1, commit_sz do
+				db_commits[i]:merge(new_db)
+			end
+            save(new_db)
+            db_commits = {}
+        end
+        db_cache = new_db
+        if _G.eventFileParsed then
+            _G.eventFileParsed()
+        end
+        module_data_loaded = true
+        print("module data load")
+    end
+
+    local try_sync = function()
+        if not next_module_sync or os.time() >= next_module_sync then
+            system.loadFile(FILE_NUMBER)
+            next_module_sync = os.time() + FILE_LOAD_INTERVAL
+        end
+    end
+
+    local get_md_loaded = function()
+        return module_data_loaded
+    end
+
+    --local set_loaded_callback = function(cb)
+    --    loaded_callback = cb
+    --end
+
+	MDHelper.getMaps = get_maps
+	MDHelper.commit = commit
+    MDHelper.parse = parse
+    --MDHelper.syncAsap = sync_asap  -- ?_?
+    MDHelper.trySync = try_sync
+    MDHelper.getMdLoaded = get_md_loaded
+    --MDHelper.setLoadedCallback = set_loaded_callback
+end
+
+local maps = {{code=1852359, hard_diff=4, div_diff=3, completed=0, rounds=0},{code=294822, hard_diff=2, div_diff=0, completed=0, rounds=0},{code=1289915, hard_diff=1, div_diff=0, completed=0, rounds=0},{code=1236698, hard_diff=1, div_diff=1, completed=0, rounds=0},{code=3587523, hard_diff=2, div_diff=3, completed=0, rounds=0},{code=6114320, hard_diff=0, div_diff=2, completed=0, rounds=0},{code=2611862, hard_diff=3, div_diff=3, completed=0, rounds=0},{code=3292713, hard_diff=4, div_diff=4, completed=0, rounds=0},{code=5479449, hard_diff=3, div_diff=2, completed=0, rounds=0},{code=1287411, hard_diff=3, div_diff=3, completed=0, rounds=0},{code=3833268, hard_diff=3, div_diff=3, completed=0, rounds=0},{code=6244577, hard_diff=1, div_diff=2, completed=0, rounds=0},{code=6400012, hard_diff=3, div_diff=3, completed=0, rounds=0},{code=3630912, hard_diff=3, div_diff=3, completed=0, rounds=0},{code=5417400, hard_diff=3, div_diff=3, completed=0, rounds=0},{code=6684914, hard_diff=0, div_diff=1, completed=0, rounds=0},{code=7294988, hard_diff=3, div_diff=4, completed=0, rounds=0},{code=2183071, hard_diff=1, div_diff=1, completed=0, rounds=0},{code=2187511, hard_diff=2, div_diff=3, completed=0, rounds=0},{code=3518304, hard_diff=1, div_diff=1, completed=0, rounds=0},{code=473464, hard_diff=1, div_diff=2, completed=0, rounds=0},{code=4730674, hard_diff=4, div_diff=3, completed=0, rounds=0},{code=2116888, hard_diff=4, div_diff=4, completed=0, rounds=0},{code=586103, hard_diff=2, div_diff=4, completed=0, rounds=0},{code=3376768, hard_diff=3, div_diff=3, completed=0, rounds=0},{code=2670753, hard_diff=2, div_diff=3, completed=0, rounds=0},{code=1593943, hard_diff=3, div_diff=4, completed=0, rounds=0},{code=387529, hard_diff=5, div_diff=5, completed=0, rounds=0},{code=7747230, hard_diff=4, div_diff=4, completed=0, rounds=0},{code=653426, hard_diff=2, div_diff=3, completed=0, rounds=0},{code=4113708, hard_diff=2, div_diff=3, completed=0, rounds=0},{code=6328976, hard_diff=1, div_diff=1, completed=0, rounds=0},{code=7747641, hard_diff=2, div_diff=4, completed=0, rounds=0},{code=7747649, hard_diff=3, div_diff=4, completed=0, rounds=0},{code=7747238, hard_diff=5, div_diff=5, completed=0, rounds=0},{code=3688810, hard_diff=2, div_diff=3, completed=0, rounds=0},{code=4066292, hard_diff=2, div_diff=3, completed=0, rounds=0},{code=7747241, hard_diff=3, div_diff=2, completed=0, rounds=0},{code=7749467, hard_diff=3, div_diff=3, completed=0, rounds=0},{code=7749472, hard_diff=5, div_diff=5, completed=0, rounds=0},{code=7748557, hard_diff=4, div_diff=4, completed=0, rounds=0},{code=6727382, hard_diff=3, div_diff=2, completed=0, rounds=0},{code=5978741, hard_diff=2, div_diff=2, completed=0, rounds=0},{code=7749479, hard_diff=1, div_diff=1, completed=0, rounds=0},{code=7749488, hard_diff=2, div_diff=3, completed=0, rounds=0},{code=6518642, hard_diff=2, div_diff=2, completed=0, rounds=0},{code=7746353, hard_diff=3, div_diff=4, completed=0, rounds=0},{code=7746357, hard_diff=5, div_diff=5, completed=0, rounds=0},{code=7746359, hard_diff=2, div_diff=2, completed=0, rounds=0},{code=1597117, hard_diff=2, div_diff=2, completed=0, rounds=0},}
+local done = false
+local commited = false
+
+function eventLoop()
+	if not done then
+		MDHelper.trySync()
+	end
+end
+
+function eventFileLoaded(file, data)
+    local success, result = pcall(MDHelper.parse, file, data)
+    if not success then
+        print(string.format("Exception encountered in eventFileLoaded: %s", result))
+    end
+end
+
+function eventFileParsed()
+	if not done then
+		print("parsed, committing")
+		MDHelper.commit("cass", MDHelper.OP_REPLACE_MAPS, maps)
+		commited = true
+	end
+end
 
 function eventFileSaved(n)
+	if commited then
+		done = true
+	end
+	print("file "..n.." was saved!")
     tfm.exec.chatMessage("file "..n.." was saved!")
 end
+
+MDHelper.trySync()

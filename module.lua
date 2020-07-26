@@ -8,11 +8,8 @@ local playerData = {}  -- module persistent player data
 local pd_loaded = {}  -- table of bool flags denoting players in which have successfully loadaed data
 local roundv = {}  -- data spanning the lifetime of the round
 local new_game_vars = {}  -- data spanning the lifetime till the next eventNewGame
-local db_cache = {}
 local mapcodes = {}
 local module_started = false
-local module_data_loaded = false
-local next_module_sync = nil  -- when the next module data syncing can occur
 
 @include translations-gen/*.lua
 
@@ -60,6 +57,8 @@ local WINDOW_GUI = lshift(0, 7)
 local WINDOW_HELP = lshift(1, 7)
 local WINDOW_LOBBY = lshift(2, 7)
 local WINDOW_OPTIONS = lshift(3, 7)
+local WINDOW_DB_MAP = lshift(4, 7)
+local WINDOW_DB_HISTORY = lshift(4, 7)
 
 -- TextAreas
 local TA_SPECTATING = 9000
@@ -111,24 +110,10 @@ local TSM_DIV = 2
 -- Room
 local DEFAULT_MAX_PLAYERS = 50
 
--- File number (this is per-Lua dev, change it accordingly and careful not to let your data get overridden!)
+-- Module ID (this is per-Lua dev, change it accordingly and careful not to let your data get overridden!)
 local MODULE_ID = 2
-local FILE_NUMBER = MODULE_ID
-local FILE_LOAD_INTERVAL = 60005  -- in milliseconds
-local SAVE_PD_WAITTIME = 5000  -- in milliseconds, minimum waiting time for saving player data when saving is requested via md.scheduleSave
 
--- Module data
-local MOD_SCHEMA = {
-    [1] = {
-        VERSION = 1,
-        db2.VarDataList{ key="maps", size=4000, datatype=db2.Object{schema={
-            db2.UnsignedInt{ key="code", size=4 },
-            db2.UnsignedInt{ key="hard", size=1 },
-            db2.UnsignedInt{ key="div", size=1 },
-        }}},
-    }
-}
-local LATEST_MOD_VER = 1
+local SAVE_PD_WAITTIME = 5000  -- in milliseconds, minimum waiting time for saving player data when saving is requested via md.scheduleSave
 
 -- Global player data structure
 local GLOBAL_PD_SCHEMA = {
@@ -142,7 +127,7 @@ local GLOBAL_PD_SCHEMA = {
 local MODULE_PD_SCHEMA = {
     [1] = {
         VERSION = 1,
-        db2.UnsignedInt{ key="exp", size=4 },  -- experience points
+        db2.UnsignedInt{ key="exp", size=7 },  -- experience points
         db2.UnsignedInt{ key="toggles", size=4 },  -- player options bit set (togglebles)
     }
 }
@@ -281,6 +266,209 @@ do
     map_sched.run = run
 end
 
+-- Module data helper
+local MDHelper = {}
+do
+    local FILE_NUMBER = MODULE_ID
+    local FILE_LOAD_INTERVAL = 60005  -- in milliseconds
+    local LATEST_MD_VER = 1
+
+    local db_cache = {}
+    local db_commits = {}
+    local module_data_loaded = false
+    local next_module_sync = nil  -- when the next module data syncing can occur
+
+    -- DB operations/commits
+    MDHelper.OP_ADD_MAP = 1
+    MDHelper.OP_REMOVE_MAP = 2
+    MDHelper.OP_UPDATE_MAP_HARD = 3
+    MDHelper.OP_UPDATE_MAP_DIV = 4
+    MDHelper.OP_ADD_MAP_COMPLETION = 5
+    MDHelper.OP_ADD_BAN = 6
+    MDHelper.OP_REMOVE_BAN = 7
+    MDHelper.OP_REPLACE_MAPS = 8
+
+    -- Module data DB2 schemas
+    local MD_SCHEMA = {
+        [1] = {
+            VERSION = 1,
+            db2.VarDataList{ key="maps", size=10000, datatype=db2.Object{schema={
+                db2.UnsignedInt{ key="code", size=4 },
+                db2.UnsignedInt{ key="hard_diff", size=1 },
+                db2.UnsignedInt{ key="div_diff", size=1 },
+                db2.UnsignedInt{ key="completed", size=5 },
+                db2.UnsignedInt{ key="rounds", size=5 },
+            }}},
+            db2.VarDataList{ key="banned", size=1000, datatype=db2.Object{schema={
+                db2.VarChar{ key="name", size=25 },
+                db2.VarChar{ key="reason", size=100 },
+                db2.UnsignedInt{ key="time", size=5 },  -- in seconds
+            }}},
+            db2.VarDataList{ key="module_log", size=1000, datatype=db2.Object{schema={
+                db2.VarChar{ key="committer", size=25 },
+                db2.Switch{ key="op", typekey = "op_id", typedatatype = db2.UnsignedInt{ size = 2 }, datatypemap = {
+                    [MDHelper.OP_ADD_MAP] = db2.Object{schema={
+                        db2.UnsignedInt{ key="code", size=4 },
+                    }},
+                    [MDHelper.OP_REMOVE_MAP] = db2.Object{schema={
+                        db2.UnsignedInt{ key="code", size=4 },
+                    }},
+                    [MDHelper.OP_UPDATE_MAP_HARD] = db2.Object{schema={
+                        db2.UnsignedInt{ key="diff", size=1 },
+                    }},
+                    [MDHelper.OP_UPDATE_MAP_DIV] = db2.Object{schema={
+                        db2.UnsignedInt{ key="diff", size=1 },
+                    }},
+                    [MDHelper.OP_ADD_BAN] = db2.Object{schema={
+                        db2.VarChar{ key="name", size=25 },
+                    }},
+                    [MDHelper.OP_REMOVE_BAN] = db2.Object{schema={
+                        db2.VarChar{ key="name", size=25 },
+                    }},
+                    [MDHelper.OP_REPLACE_MAPS] = db2.Object{schema={}},
+                }},
+            }}},
+        }
+    }
+
+    local default_db = {
+        maps = {},
+        banned = {},
+        module_log = {},
+    }
+
+    local operations = {
+        [MDHelper.OP_ADD_MAP] = {
+            init = function(self, map)
+                self.map = map
+            end,
+            merge = function(self, db)
+            end,
+        },
+        [MDHelper.OP_REMOVE_MAP] = {
+            init = function(self, map)
+                self.map = map
+            end,
+            merge = function(self, db)
+            end,
+        },
+        [MDHelper.OP_UPDATE_MAP_HARD] = {
+            init = function(self, diff)
+                self.diff = diff
+            end,
+            merge = function(self, db)
+            end,
+        },
+        [MDHelper.OP_UPDATE_MAP_DIV] = {
+            init = function(self, diff)
+                self.diff = diff
+            end,
+            merge = function(self, db)
+            end,
+        },
+        [MDHelper.OP_ADD_MAP_COMPLETION] = {
+            init = function(self, completed)
+                self.completed = completed
+            end,
+            merge = function(self, db)
+            end,
+        },
+        [MDHelper.OP_ADD_BAN] = {
+            init = function(self, pn)
+                self.pn = pn
+            end,
+            merge = function(self, db)
+            end,
+        },
+        [MDHelper.OP_REMOVE_BAN] = {
+            init = function(self, pn)
+                self.map = map
+            end,
+            merge = function(self, db)
+            end,
+        },
+        [MDHelper.OP_REPLACE_MAPS] = {
+            init = function(self, map_table)
+				self.map_table = map_table
+            end,
+            merge = function(self, db)
+				db.maps = self.map_table
+            end,
+        },
+    }
+
+    local get_maps = function()
+        return db_cache.maps
+    end
+
+    local commit = function(pn, op_id, a1, a2, a3, a4)
+        local op = operations[op_id]
+        if op then
+            local op_mt = setmetatable({}, { __index = {
+                init = op.init,
+                merge = op.merge
+            }})
+            op_mt:init(a1, a2, a3, a4)
+            op_mt:merge(db_cache)
+            db_commits[#db_commits+1] = op_mt
+        else
+            return error("Invalid operation.")
+        end
+    end
+
+    local save = function(db)
+        local encoded_md = db2.encode(MD_SCHEMA[LATEST_MD_VER], db)
+        system.saveFile(encoded_md, FILE_NUMBER)
+        print("module data save")
+    end
+
+    local parse = function(file, data)
+        if tonumber(file) ~= FILE_NUMBER then return end
+        local data_sz = #data
+        local new_db = data_sz > 0 and db2.decode(MD_SCHEMA, data) or default_db
+        local commit_sz = #db_commits
+		if data_sz == 0 then
+			print("init and save default db")
+			save(new_db)
+		elseif commit_sz > 0 then
+			for i = 1, commit_sz do
+				db_commits[i]:merge(new_db)
+			end
+            save(new_db)
+            db_commits = {}
+        end
+        db_cache = new_db
+        if _G.eventFileParsed then
+            _G.eventFileParsed()
+        end
+        module_data_loaded = true
+        print("module data load")
+    end
+
+    local try_sync = function()
+        if not next_module_sync or os.time() >= next_module_sync then
+            system.loadFile(FILE_NUMBER)
+            next_module_sync = os.time() + FILE_LOAD_INTERVAL
+        end
+    end
+
+    local get_md_loaded = function()
+        return module_data_loaded
+    end
+
+    --local set_loaded_callback = function(cb)
+    --    loaded_callback = cb
+    --end
+
+	MDHelper.getMaps = get_maps
+	MDHelper.commit = commit
+    MDHelper.parse = parse
+    --MDHelper.syncAsap = sync_asap  -- ?_?
+    MDHelper.trySync = try_sync
+    MDHelper.getMdLoaded = get_md_loaded
+    --MDHelper.setLoadedCallback = set_loaded_callback
+end
+
 -- Player data helper
 local PDHelper
 do
@@ -410,9 +598,9 @@ end
 local rotate_evt
 do
     local function rotate()
-        if not module_data_loaded then
+        if not MDHelper.getMdLoaded() then
             print("module data hasn't been loaded, retrying...")
-            system.newTimer(rotate, 50)  -- ewww
+            system.newTimer(rotate, 1000)  -- ewww
         end
         local diff,map
         local mode = roundv.mode
@@ -756,6 +944,42 @@ do
                 p_data.images = {}
             end,
             type = MUTUALLY_EXCLUSIVE,
+            players = {}
+        },
+        [WINDOW_DB_MAP] = {
+            open = function(pn, p_data, tab)
+                ui.addTextArea(WINDOW_DB_MAP+1,"",pn,75,40,650,340,0x133337,0x133337,1,true)  -- the background
+                
+                ui.addTextArea(WINDOW_OPTIONS+1, "<font size='3'><br><p align='center'><font size='13'><J><b>Settings", pn, 588,52, 102,30, 1, 0, 0, true)
+                ui.addTextArea(WINDOW_OPTIONS+2, "<a href='event:options!close'><font size='30'>\n", pn, 716,48, 31,31, 1, 0, 0, true)
+
+                ui.addTextArea(WINDOW_OPTIONS+3, table.concat(opts_str, "\n\n").."\n", pn,560,105,223,nil,1,0,0,true)
+                ui.addTextArea(WINDOW_OPTIONS+4, "<font size='11'>"..table.concat(opts_helplink_str, "\n\n").."\n", pn,540,103,23,nil,1,0,0,true)
+            end,
+            close = function(pn, p_data)
+                for i = 1, 5 do
+                    ui.removeTextArea(WINDOW_OPTIONS+i, pn)
+                end
+                for _, imgs in pairs(p_data.images) do
+                    for k, img_dat in pairs(imgs) do
+                        tfm.exec.removeImage(img_dat[1])
+                    end
+                end
+                p_data.images = {}
+            end,
+            type = INDEPENDENT,
+            players = {}
+        },
+        [WINDOW_DB_HISTORY] = {
+            open = function(pn, p_data, tab)
+                ui.addTextArea(WINDOW_DB_HISTORY+1,"",pn,75,40,650,340,0x133337,0x133337,1,true)  -- the background
+            end,
+            close = function(pn, p_data)
+                for i = 1, 5 do
+                    ui.removeTextArea(WINDOW_DB_HISTORY+i, pn)
+                end
+            end,
+            type = INDEPENDENT,
             players = {}
         },
     }
@@ -1151,6 +1375,21 @@ cmds = {
         end,
         perms = GROUP_STAFF
     },
+    db = {
+        func = function(pn, m, w1, w2)
+            if not MDHelper.getMdLoaded() then
+                tfm.exec.chatMessage("Module data not loaded yet, please try again.", pn)
+            end
+            if w2 == "map" then
+                if not roundv.lobby then
+                    sWindow.open(WINDOW_DB_MAP, pn)
+                end
+            elseif w2 == "history" then
+                sWindow.open(WINDOW_DB_HISTORY, pn)
+            end
+        end,
+        perms = GROUP_STAFF
+    },
 }
 
 cmds_alias = {
@@ -1327,7 +1566,16 @@ callbacks = {
             tfm.exec.chatMessage("<J>"..opt[1]..": "..opt[2], pn)
         end
     end,
-
+    dbmap = function(pn, action)
+        if action == "close" then
+            sWindow.close(WINDOW_DB_MAP, pn)
+        end
+    end,
+    dbhist = function(pn, action)
+        if action == "close" then
+            sWindow.close(WINDOW_DB_HISTORY, pn)
+        end
+    end,
 }
 
 GetExpMult = function()
@@ -1461,27 +1709,22 @@ UpdateCircle = function()
 end
 
 local UpdateMapCodes = function()
-    local maps = db_cache.maps
+    local maps = MDHelper.getMaps()
     mapcodes = {[TSM_HARD]={}, [TSM_DIV]={}}
     local hardcodes, divcodes = mapcodes[TSM_HARD], mapcodes[TSM_DIV]
     for i = 1, #maps do
         local map = maps[i]
-        if map.hard > 0 then
-            if not hardcodes[map.hard] then hardcodes[map.hard] = {} end
-            local cat = hardcodes[map.hard]
+        if map.hard_diff > 0 then
+            if not hardcodes[map.hard_diff] then hardcodes[map.hard_diff] = {} end
+            local cat = hardcodes[map.hard_diff]
             cat[#cat+1] = map.code
         end
-        if map.div > 0 then
-            if not divcodes[map.div] then divcodes[map.div] = {} end
-            local cat = divcodes[map.div]
+        if map.div_diff > 0 then
+            if not divcodes[map.div_diff] then divcodes[map.div_diff] = {} end
+            local cat = divcodes[map.div_diff]
             cat[#cat+1] = map.code
         end
     end
-end
-
-local SyncModuleData = function(data)
-    db_cache = db2.decode(MOD_SCHEMA, data)
-    UpdateMapCodes()
 end
 
 ----- EVENTS
@@ -1501,14 +1744,15 @@ function eventChatCommand(pn, msg)
 end
 
 function eventFileLoaded(file, data)
-    if tonumber(file) ~= FILE_NUMBER then return end
-    local success, result = pcall(SyncModuleData, data)
+    local success, result = pcall(MDHelper.parse, file, data)
     if not success then
-        module_data_loaded = false
         print(string.format("Exception encountered in eventFileLoaded: %s", result))
-    else
-        module_data_loaded = true
     end
+end
+
+-- Called from MDHelper when parsing is done
+function eventFileParsed()
+    UpdateMapCodes()
 end
 
 function eventPlayerDataLoaded(pn, data)
@@ -1536,10 +1780,7 @@ end
 function eventLoop(elapsed, remaining)
     map_sched.run()
     PDHelper.checkSaves()
-    if next_module_sync and os.time() >= next_module_sync then
-        system.loadFile(FILE_NUMBER)
-        next_module_sync = os.time() + FILE_LOAD_INTERVAL
-    end
+    MDHelper.trySync()
     if not roundv.running then return end
     if roundv.phase < 3 and remaining <= 0 then
         rotate_evt.timesup()
@@ -1892,8 +2133,7 @@ local init = function()
     tfm.exec.setRoomPassword("")
     rotate_evt.lobby()
 
-    system.loadFile(FILE_NUMBER)
-    next_module_sync = os.time() + FILE_LOAD_INTERVAL
+    MDHelper.trySync()
 end
 
 init()
