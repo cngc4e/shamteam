@@ -858,7 +858,11 @@ do
     local FILE_LOAD_INTERVAL = 60005  -- in milliseconds
     local LATEST_MD_VER = 1
 
-    local db_cache = {}
+    local db_cache = {
+        maps = {},
+        banned = {},
+        module_log = {},
+    }
     local db_commits = {}
     local module_data_loaded = false
     local next_module_sync = nil  -- when the next module data syncing can occur
@@ -891,6 +895,7 @@ do
             }}},
             db2.VarDataList{ key="module_log", size=1000, datatype=db2.Object{schema={
                 db2.VarChar{ key="committer", size=25 },
+                db2.UnsignedInt{ key="time", size=5 },  -- in seconds
                 db2.Switch{ key="op", typekey = "op_id", typedatatype = db2.UnsignedInt{ size = 2 }, datatypemap = {
                     [MDHelper.OP_ADD_MAP] = db2.Object{schema={
                         db2.UnsignedInt{ key="code", size=4 },
@@ -916,25 +921,49 @@ do
         }
     }
 
-    local default_db = {
-        maps = {},
-        banned = {},
-        module_log = {},
-    }
+    MDHelper.MERGE_OK = 0
+    MDHelper.MERGE_NOTHING = 1
+    MDHelper.MERGE_FAIL = 2
 
     local operations = {
         [MDHelper.OP_ADD_MAP] = {
-            init = function(self, map)
-                self.map = map
+            init = function(self, mapcode)
+                self.mapcode = mapcode
             end,
             merge = function(self, db)
+                local maps = db.maps
+                local found = false
+                for i = 1, #maps do
+                    if maps[i].code == self.mapcode then
+                        found = true
+                        break
+                    end
+                end
+                if found then
+                    return MDHelper.MERGE_NOTHING, "Map already exists in the database."
+                end
+                maps[#maps+1] = {code=self.mapcode, hard_diff=0, div_diff=0, completed=0, rounds=0}
+                return MDHelper.MERGE_OK
             end,
         },
         [MDHelper.OP_REMOVE_MAP] = {
-            init = function(self, map)
-                self.map = map
+            init = function(self, mapcode)
+                self.mapcode = mapcode
             end,
             merge = function(self, db)
+                local maps = db.maps
+                local found = false
+                for i = 1, #maps do
+                    if maps[i].code == self.mapcode then
+                        table.remove(maps, i)
+                        found = true
+                        break
+                    end
+                end
+                if not found then
+                    return MDHelper.MERGE_NOTHING, "Map does not exist in the database."
+                end
+                return MDHelper.MERGE_OK
             end,
         },
         [MDHelper.OP_UPDATE_MAP_HARD] = {
@@ -942,6 +971,19 @@ do
                 self.diff = diff
             end,
             merge = function(self, db)
+                local maps = db.maps
+                local found = false
+                for i = 1, #maps do
+                    if maps[i].code == self.mapcode then
+                        maps[i].hard_diff = self.diff
+                        found = true
+                        break
+                    end
+                end
+                if not found then
+                    return MDHelper.MERGE_NOTHING, "Map does not exist in the database."
+                end
+                return MDHelper.MERGE_OK
             end,
         },
         [MDHelper.OP_UPDATE_MAP_DIV] = {
@@ -949,27 +991,89 @@ do
                 self.diff = diff
             end,
             merge = function(self, db)
+                local maps = db.maps
+                local found = false
+                for i = 1, #maps do
+                    if maps[i].code == self.mapcode then
+                        maps[i].div_diff = self.diff
+                        found = true
+                        break
+                    end
+                end
+                if not found then
+                    return MDHelper.MERGE_NOTHING, "Map does not exist in the database."
+                end
+                return MDHelper.MERGE_OK
             end,
         },
         [MDHelper.OP_ADD_MAP_COMPLETION] = {
-            init = function(self, completed)
+            init = function(self, mapcode, completed)
+                self.mapcode = mapcode
                 self.completed = completed
             end,
             merge = function(self, db)
+                local maps = db.maps
+                local found = false
+                for i = 1, #maps do
+                    if maps[i].code == self.mapcode then
+                        found = maps[i]
+                        break
+                    end
+                end
+                if not found then
+                    return MDHelper.MERGE_NOTHING, "Map does not exist in the database."
+                end
+
+                if self.completed then
+                    found.completion = found.completion + 1
+                end
+                found.rounds = found.rounds + 1
+                return MDHelper.MERGE_OK
             end,
         },
         [MDHelper.OP_ADD_BAN] = {
-            init = function(self, pn)
+            init = function(self, pn, reason)
                 self.pn = pn
+                self.reason = reason or ""
             end,
             merge = function(self, db)
+                local banned = db.banned
+                for i = 1, #banned do
+                    if banned[i].name == self.pn then
+                        found = true
+                        break
+                    end
+                end
+                if found then
+                    return MDHelper.MERGE_NOTHING, "Player is already banned."
+                end
+
+                banned[#banned+1] = {
+                    name = self.pn,
+                    reason = self.reason,
+                    time = os.time()/1000
+                }
+                return MDHelper.MERGE_OK
             end,
         },
         [MDHelper.OP_REMOVE_BAN] = {
             init = function(self, pn)
-                self.map = map
+                self.pn = pn
             end,
             merge = function(self, db)
+                local banned = db.banned
+                local found = false
+                for i = 1, #banned do
+                    if banned[i].name == self.pn then
+                        table.remove(banned, i)
+                        found = true
+                        break
+                    end
+                end
+                if not found then
+                    return MDHelper.MERGE_NOTHING, "No existing player was banned."
+                end
+                return MDHelper.MERGE_OK
             end,
         },
         [MDHelper.OP_REPLACE_MAPS] = {
@@ -977,13 +1081,14 @@ do
 				self.map_table = map_table
             end,
             merge = function(self, db)
-				db.maps = self.map_table
+                db.maps = self.map_table
+                return MDHelper.MERGE_OK
             end,
         },
     }
 
-    local get_maps = function()
-        return db_cache.maps
+    local get_table = function(tbl_name)
+        return db_cache[tbl_name]
     end
 
     local commit = function(pn, op_id, a1, a2, a3, a4)
@@ -1009,20 +1114,21 @@ do
 
     local parse = function(file, data)
         if tonumber(file) ~= FILE_NUMBER then return end
-        local data_sz = #data
-        local new_db = data_sz > 0 and db2.decode(MD_SCHEMA, data) or default_db
-        local commit_sz = #db_commits
-		if data_sz == 0 then
+        if #data == 0 then
 			print("init and save default db")
-			save(new_db)
-		elseif commit_sz > 0 then
-			for i = 1, commit_sz do
-				db_commits[i]:merge(new_db)
-			end
-            save(new_db)
-            db_commits = {}
+            save(db_cache)
+        else
+            local new_db = db2.decode(MD_SCHEMA, data)
+            local commit_sz = #db_commits
+            if commit_sz > 0 then
+                for i = 1, commit_sz do
+                    db_commits[i]:merge(new_db)
+                end
+                save(new_db)
+                db_commits = {}
+            end
+            db_cache = new_db
         end
-        db_cache = new_db
         if _G.eventFileParsed then
             _G.eventFileParsed()
         end
@@ -1045,7 +1151,7 @@ do
     --    loaded_callback = cb
     --end
 
-	MDHelper.getMaps = get_maps
+	MDHelper.getTable = get_table
 	MDHelper.commit = commit
     MDHelper.parse = parse
     --MDHelper.syncAsap = sync_asap  -- ?_?

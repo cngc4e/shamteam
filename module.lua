@@ -58,7 +58,7 @@ local WINDOW_HELP = lshift(1, 7)
 local WINDOW_LOBBY = lshift(2, 7)
 local WINDOW_OPTIONS = lshift(3, 7)
 local WINDOW_DB_MAP = lshift(4, 7)
-local WINDOW_DB_HISTORY = lshift(4, 7)
+local WINDOW_DB_HISTORY = lshift(5, 7)
 
 -- TextAreas
 local TA_SPECTATING = 9000
@@ -273,7 +273,11 @@ do
     local FILE_LOAD_INTERVAL = 60005  -- in milliseconds
     local LATEST_MD_VER = 1
 
-    local db_cache = {}
+    local db_cache = {
+        maps = {},
+        banned = {},
+        module_log = {},
+    }
     local db_commits = {}
     local module_data_loaded = false
     local next_module_sync = nil  -- when the next module data syncing can occur
@@ -306,6 +310,7 @@ do
             }}},
             db2.VarDataList{ key="module_log", size=1000, datatype=db2.Object{schema={
                 db2.VarChar{ key="committer", size=25 },
+                db2.UnsignedInt{ key="time", size=5 },  -- in seconds
                 db2.Switch{ key="op", typekey = "op_id", typedatatype = db2.UnsignedInt{ size = 2 }, datatypemap = {
                     [MDHelper.OP_ADD_MAP] = db2.Object{schema={
                         db2.UnsignedInt{ key="code", size=4 },
@@ -331,60 +336,161 @@ do
         }
     }
 
-    local default_db = {
-        maps = {},
-        banned = {},
-        module_log = {},
-    }
+    MDHelper.MERGE_OK = 0
+    MDHelper.MERGE_NOTHING = 1
+    MDHelper.MERGE_FAIL = 2
 
     local operations = {
         [MDHelper.OP_ADD_MAP] = {
-            init = function(self, map)
-                self.map = map
+            init = function(self, mapcode)
+                self.mapcode = mapcode
             end,
             merge = function(self, db)
+                local maps = db.maps
+                local found = false
+                for i = 1, #maps do
+                    if maps[i].code == self.mapcode then
+                        found = true
+                        break
+                    end
+                end
+                if found then
+                    return MDHelper.MERGE_NOTHING, "Map already exists in the database."
+                end
+                maps[#maps+1] = {code=self.mapcode, hard_diff=0, div_diff=0, completed=0, rounds=0}
+                return MDHelper.MERGE_OK
             end,
         },
         [MDHelper.OP_REMOVE_MAP] = {
-            init = function(self, map)
-                self.map = map
+            init = function(self, mapcode)
+                self.mapcode = mapcode
             end,
             merge = function(self, db)
+                local maps = db.maps
+                local found = false
+                for i = 1, #maps do
+                    if maps[i].code == self.mapcode then
+                        table.remove(maps, i)
+                        found = true
+                        break
+                    end
+                end
+                if not found then
+                    return MDHelper.MERGE_NOTHING, "Map does not exist in the database."
+                end
+                return MDHelper.MERGE_OK
             end,
         },
         [MDHelper.OP_UPDATE_MAP_HARD] = {
-            init = function(self, diff)
-                self.diff = diff
+            init = function(self, mapcode, diff)
+                self.mapcode = mapcode
+                self.diff = tonumber(diff)
             end,
             merge = function(self, db)
+                local maps = db.maps
+                local found = false
+                for i = 1, #maps do
+                    if maps[i].code == self.mapcode then
+                        maps[i].hard_diff = self.diff
+                        found = true
+                        break
+                    end
+                end
+                if not found then
+                    return MDHelper.MERGE_NOTHING, "Map does not exist in the database."
+                end
+                return MDHelper.MERGE_OK
             end,
         },
         [MDHelper.OP_UPDATE_MAP_DIV] = {
-            init = function(self, diff)
-                self.diff = diff
+            init = function(self, mapcode, diff)
+                self.mapcode = mapcode
+                self.diff = tonumber(diff)
             end,
             merge = function(self, db)
+                local maps = db.maps
+                local found = false
+                for i = 1, #maps do
+                    if maps[i].code == self.mapcode then
+                        maps[i].div_diff = self.diff
+                        found = true
+                        break
+                    end
+                end
+                if not found then
+                    return MDHelper.MERGE_NOTHING, "Map does not exist in the database."
+                end
+                return MDHelper.MERGE_OK
             end,
         },
         [MDHelper.OP_ADD_MAP_COMPLETION] = {
-            init = function(self, completed)
-                self.completed = completed
+            init = function(self, mapcode, completed)
+                self.mapcode = mapcode
+                self.completed = tonumber(completed)
             end,
             merge = function(self, db)
+                local maps = db.maps
+                local found = false
+                for i = 1, #maps do
+                    if maps[i].code == self.mapcode then
+                        found = maps[i]
+                        break
+                    end
+                end
+                if not found then
+                    return MDHelper.MERGE_NOTHING, "Map does not exist in the database."
+                end
+
+                if self.completed then
+                    found.completion = found.completion + 1
+                end
+                found.rounds = found.rounds + 1
+                return MDHelper.MERGE_OK
             end,
         },
         [MDHelper.OP_ADD_BAN] = {
-            init = function(self, pn)
+            init = function(self, pn, reason)
                 self.pn = pn
+                self.reason = reason or ""
             end,
             merge = function(self, db)
+                local banned = db.banned
+                for i = 1, #banned do
+                    if banned[i].name == self.pn then
+                        found = true
+                        break
+                    end
+                end
+                if found then
+                    return MDHelper.MERGE_NOTHING, "Player is already banned."
+                end
+
+                banned[#banned+1] = {
+                    name = self.pn,
+                    reason = self.reason,
+                    time = os.time()/1000
+                }
+                return MDHelper.MERGE_OK
             end,
         },
         [MDHelper.OP_REMOVE_BAN] = {
             init = function(self, pn)
-                self.map = map
+                self.pn = pn
             end,
             merge = function(self, db)
+                local banned = db.banned
+                local found = false
+                for i = 1, #banned do
+                    if banned[i].name == self.pn then
+                        table.remove(banned, i)
+                        found = true
+                        break
+                    end
+                end
+                if not found then
+                    return MDHelper.MERGE_NOTHING, "No existing player was banned."
+                end
+                return MDHelper.MERGE_OK
             end,
         },
         [MDHelper.OP_REPLACE_MAPS] = {
@@ -392,13 +498,14 @@ do
 				self.map_table = map_table
             end,
             merge = function(self, db)
-				db.maps = self.map_table
+                db.maps = self.map_table
+                return MDHelper.MERGE_OK
             end,
         },
     }
 
-    local get_maps = function()
-        return db_cache.maps
+    local get_table = function(tbl_name)
+        return db_cache[tbl_name]
     end
 
     local commit = function(pn, op_id, a1, a2, a3, a4)
@@ -424,20 +531,21 @@ do
 
     local parse = function(file, data)
         if tonumber(file) ~= FILE_NUMBER then return end
-        local data_sz = #data
-        local new_db = data_sz > 0 and db2.decode(MD_SCHEMA, data) or default_db
-        local commit_sz = #db_commits
-		if data_sz == 0 then
+        if #data == 0 then
 			print("init and save default db")
-			save(new_db)
-		elseif commit_sz > 0 then
-			for i = 1, commit_sz do
-				db_commits[i]:merge(new_db)
-			end
-            save(new_db)
-            db_commits = {}
+            save(db_cache)
+        else
+            local new_db = db2.decode(MD_SCHEMA, data)
+            local commit_sz = #db_commits
+            if commit_sz > 0 then
+                for i = 1, commit_sz do
+                    db_commits[i]:merge(new_db)
+                end
+                save(new_db)
+                db_commits = {}
+            end
+            db_cache = new_db
         end
-        db_cache = new_db
         if _G.eventFileParsed then
             _G.eventFileParsed()
         end
@@ -460,7 +568,7 @@ do
     --    loaded_callback = cb
     --end
 
-	MDHelper.getMaps = get_maps
+	MDHelper.getTable = get_table
 	MDHelper.commit = commit
     MDHelper.parse = parse
     --MDHelper.syncAsap = sync_asap  -- ?_?
@@ -601,6 +709,7 @@ do
         if not MDHelper.getMdLoaded() then
             print("module data hasn't been loaded, retrying...")
             system.newTimer(rotate, 1000)  -- ewww
+            return
         end
         local diff,map
         local mode = roundv.mode
@@ -833,7 +942,7 @@ do
             players = {}
         },
         [WINDOW_LOBBY] = {
-            open = function(pn, p_data, tab)
+            open = function(pn, p_data)
                 p_data.images = { main={}, mode={}, help={}, toggle={} }
 
                 --ui.addTextArea(WINDOW_LOBBY+1,"",pn,75,40,650,340,1,0,.8,true)  -- the background
@@ -906,7 +1015,7 @@ do
             players = {}
         },
         [WINDOW_OPTIONS] = {
-            open = function(pn, p_data, tab)
+            open = function(pn, p_data)
                 p_data.images = { main={}, toggle={}, help={} }
 
                 p_data.images.main[1] = {tfm.exec.addImage(IMG_OPTIONS_BG, ":"..WINDOW_OPTIONS, 520, 47, pn)}
@@ -947,31 +1056,33 @@ do
             players = {}
         },
         [WINDOW_DB_MAP] = {
-            open = function(pn, p_data, tab)
-                ui.addTextArea(WINDOW_DB_MAP+1,"",pn,75,40,650,340,0x133337,0x133337,1,true)  -- the background
-                
-                ui.addTextArea(WINDOW_OPTIONS+1, "<font size='3'><br><p align='center'><font size='13'><J><b>Settings", pn, 588,52, 102,30, 1, 0, 0, true)
-                ui.addTextArea(WINDOW_OPTIONS+2, "<a href='event:options!close'><font size='30'>\n", pn, 716,48, 31,31, 1, 0, 0, true)
+            open = function(pn, p_data)
+                local tabs = {"Add", "Remove", "&#9587; Close"}
+                local tabstr = "<p align='center'><V>"..string.rep("&#x2500;", 6).."<br>"
+                local t_str = {"<p align='center'><font size='15'>Modify map</font><br>"}
 
-                ui.addTextArea(WINDOW_OPTIONS+3, table.concat(opts_str, "\n\n").."\n", pn,560,105,223,nil,1,0,0,true)
-                ui.addTextArea(WINDOW_OPTIONS+4, "<font size='11'>"..table.concat(opts_helplink_str, "\n\n").."\n", pn,540,103,23,nil,1,0,0,true)
+                for i = 1, #tabs do
+                    local t = tabs[i]
+                    local col = GUI_BTN
+                    tabstr = tabstr..string.format("%s<a href='event:dbmap!%s'>%s</a><br><V>%s<br>", col, t, t, string.rep("&#x2500;", 6))
+                end
+
+                t_str[#t_str+1] = "<ROSE>@"..roundv.mapinfo.code.."<br><V>"..string.rep("&#x2500;", 15).."</p><p align='left'><br>"
+                
+
+                ui.addTextArea(WINDOW_DB_MAP+1, tabstr, pn, 170, 60, 70, nil, 1, 0, .8, true)
+	            ui.addTextArea(WINDOW_DB_MAP+2, table.concat(t_str), pn, 250, 50, 300, 300, 1, 0, .8, true)
             end,
             close = function(pn, p_data)
-                for i = 1, 5 do
-                    ui.removeTextArea(WINDOW_OPTIONS+i, pn)
+                for i = 1, 2 do
+                    ui.removeTextArea(WINDOW_DB_MAP+i, pn)
                 end
-                for _, imgs in pairs(p_data.images) do
-                    for k, img_dat in pairs(imgs) do
-                        tfm.exec.removeImage(img_dat[1])
-                    end
-                end
-                p_data.images = {}
             end,
             type = INDEPENDENT,
             players = {}
         },
         [WINDOW_DB_HISTORY] = {
-            open = function(pn, p_data, tab)
+            open = function(pn, p_data)
                 ui.addTextArea(WINDOW_DB_HISTORY+1,"",pn,75,40,650,340,0x133337,0x133337,1,true)  -- the background
             end,
             close = function(pn, p_data)
@@ -1036,6 +1147,17 @@ do
         end
         return {}
     end 
+end
+
+-- Module data query utils
+local GetMapInfo = function(mapcode)
+    local maps = MDHelper.getTable("maps")
+    for i = 1, #maps do
+        if maps[i].code == mapcode then
+            return maps[i]
+        end
+    end
+    return nil
 end
 
 keys = {
@@ -1376,16 +1498,89 @@ cmds = {
         perms = GROUP_STAFF
     },
     db = {
-        func = function(pn, m, w1, w2)
+        func = function(pn, m, w1, w2, w3, w4)
             if not MDHelper.getMdLoaded() then
                 tfm.exec.chatMessage("Module data not loaded yet, please try again.", pn)
+                return
             end
-            if w2 == "map" then
-                if not roundv.lobby then
-                    sWindow.open(WINDOW_DB_MAP, pn)
+            local subcommands = {
+                map = function(action, p1)
+                    local actions = {
+                        info = function()
+                            local map = GetMapInfo(roundv.mapinfo.code)
+                            if not map then
+                                tfm.exec.chatMessage("<R>This map is not in rotation.", pn)
+                                return
+                            end
+                            local info = string.format("Mapcode: @%s\nHard Difficulty: %s\nDivine Difficulty: %s\nCompletion: %s / %s",
+                                    map.code, map.hard_diff, map.div_diff, map.completed, map.rounds)
+                            tfm.exec.chatMessage(info, pn)
+                        end,
+                        hard = function()
+                            local map = GetMapInfo(roundv.mapinfo.code)
+                            if not map then
+                                tfm.exec.chatMessage("<R>This map is not in rotation.", pn)
+                                return
+                            end
+                            MDHelper.commit(pn, MDHelper.OP_UPDATE_MAP_HARD, map.code, p1)
+                            tfm.exec.chatMessage("Changing Hard difficulty of @"..map.code.." to "..p1, pn)
+                        end,
+                        div = function()
+                            local map = GetMapInfo(roundv.mapinfo.code)
+                            if not map then
+                                tfm.exec.chatMessage("<R>This map is not in rotation.", pn)
+                                return
+                            end
+                            MDHelper.commit(pn, MDHelper.OP_UPDATE_MAP_DIV, map.code, p1)
+                            tfm.exec.chatMessage("Changing Divine difficulty of @"..map.code.." to "..p1, pn)
+                        end,
+                        add = function()
+                            local map = GetMapInfo(roundv.mapinfo.code)
+                            if map then
+                                tfm.exec.chatMessage("<R>This map is already in rotation.", pn)
+                                return
+                            end
+                            MDHelper.commit(pn, MDHelper.OP_ADD_MAP, map.code)
+                            tfm.exec.chatMessage("Adding @"..map.code, pn)
+                        end,
+                        remove = function()
+                            local map = GetMapInfo(roundv.mapinfo.code)
+                            if not map then
+                                tfm.exec.chatMessage("<R>This map is not in rotation.", pn)
+                                return
+                            end
+                            MDHelper.commit(pn, MDHelper.OP_REMOVE_MAP, map.code)
+                            tfm.exec.chatMessage("Removing @"..map.code, pn)
+                        end,
+                    }
+                    if actions[action] then
+                        actions[action]()
+                    else
+                        local a = {}
+                        for sb in pairs(actions) do
+                            a[#a+1] = sb
+                        end
+                        tfm.exec.chatMessage("Usage: !db map [ "..table.concat(a, " | ").." ]", pn)
+                    end
+                    -- TODO: Map settings UI?
+                    --[[if not roundv.lobby then
+                        sWindow.open(WINDOW_DB_MAP, pn)
+                    else
+                        tfm.exec.chatMessage("<R>Unable to open map settings for the lobby.", pn)
+                    end]]
+                end,
+                history = function()
+                    --sWindow.open(WINDOW_DB_HISTORY, pn)
+                end,
+            }
+            if subcommands[w2] then
+                subcommands[w2](w3, w4)
+            else
+                local s = {}
+                for sb in pairs(subcommands) do
+                    s[#s+1] = sb
                 end
-            elseif w2 == "history" then
-                sWindow.open(WINDOW_DB_HISTORY, pn)
+                tfm.exec.chatMessage("Usage: !db [ "..table.concat(s, " | ").." ]", pn)
             end
         end,
         perms = GROUP_STAFF
@@ -1567,11 +1762,13 @@ callbacks = {
         end
     end,
     dbmap = function(pn, action)
-        if action == "close" then
+        if players[pn].group < GROUP_STAFF then return end
+        if action == "Close" then
             sWindow.close(WINDOW_DB_MAP, pn)
         end
     end,
     dbhist = function(pn, action)
+        if players[pn].group < GROUP_STAFF then return end
         if action == "close" then
             sWindow.close(WINDOW_DB_HISTORY, pn)
         end
@@ -1709,7 +1906,7 @@ UpdateCircle = function()
 end
 
 local UpdateMapCodes = function()
-    local maps = MDHelper.getMaps()
+    local maps = MDHelper.getTable("maps")
     mapcodes = {[TSM_HARD]={}, [TSM_DIV]={}}
     local hardcodes, divcodes = mapcodes[TSM_HARD], mapcodes[TSM_DIV]
     for i = 1, #maps do
