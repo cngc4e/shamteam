@@ -294,6 +294,7 @@ do
         module_log = {},
     }
     local db_commits = {}
+    local inform_filesave = {}
     local module_data_loaded = false
     local next_module_sync = nil  -- when the next module data syncing can occur
 
@@ -632,7 +633,7 @@ do
                     -- add log
                     MDHelper.commit(nil, MDHelper.OP_ADD_MODULE_LOG, pn, op_id, logobj)
                 end
-                db_commits[#db_commits+1] = op_mt
+                db_commits[#db_commits+1] = { op_mt, pn }
                 return status, result or ""
             end
         else
@@ -679,10 +680,14 @@ do
             local commit_sz = #db_commits
             if commit_sz > 0 then
                 for i = 1, commit_sz do
-                    local status, result = db_commits[i]:merge(new_db)
-                    print("new db: did "..db_commits[i].op_id)
+                    local op = db_commits[i][1]
+                    local committer = db_commits[i][2]
+                    local status, result = op:merge(new_db)
+                    print("new db: did "..op.op_id)
                     if status ~= MDHelper.MERGE_OK then
                         print("Error occurred while merging on the new database: "..result or "No reason")
+                    elseif committer then
+                        inform_filesave[committer] = true
                     end
                 end
                 save(new_db)
@@ -697,6 +702,14 @@ do
         print("module data load")
     end
 
+    local on_saved = function(file)
+        if tonumber(file) ~= FILE_NUMBER then return end
+        for name in pairs(inform_filesave) do
+            tfm.exec.chatMessage("<J>All changes have been successfully saved to the database!", name)
+        end
+        inform_filesave = {}
+    end
+
     local try_sync = function()
         if not next_module_sync or os.time() >= next_module_sync then
             system.loadFile(FILE_NUMBER)
@@ -708,15 +721,10 @@ do
         return module_data_loaded
     end
 
-    --local set_loaded_callback = function(cb)
-    --    loaded_callback = cb
-    --end
-
     MDHelper.parse = parse
-    --MDHelper.syncAsap = sync_asap  -- ?_?
+    MDHelper.onSaved = on_saved
     MDHelper.trySync = try_sync
     MDHelper.getMdLoaded = get_md_loaded
-    --MDHelper.setLoadedCallback = set_loaded_callback
 end
 
 -- Player data helper
@@ -2098,6 +2106,10 @@ end
 -- Called from MDHelper when parsing is done
 function eventFileParsed()
     UpdateMapCodes()
+end
+
+function eventFileSaved(file)
+    MDHelper.onSaved(file)
 end
 
 function eventPlayerDataLoaded(pn, data)
