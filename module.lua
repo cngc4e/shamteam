@@ -179,6 +179,17 @@ local function dumptbl (tbl, indent)
     end
 end
 
+-- returns map code in integer type, nil if invalid
+local function int_mapcode(code)
+    if type(code) == "string" then
+        return tonumber(code:match("@?(%d+)"))
+    elseif type(code) == "number" then
+        return code
+    else
+        return nil
+    end
+end
+
 local function tl(name, lang)
     local lang = translations[lang] and lang or "en"
     if translations[lang][name] then
@@ -248,9 +259,12 @@ do
         local diff,map
         local mode = roundv.mode
         if roundv.custommap then
-            diff = 0
             map = roundv.custommap[1]
             mode = roundv.custommap[2] or mode
+
+            local mapinf = MDHelper.getMapInfo(map)
+            local mapinf_diff = (mode == TSM_HARD) and "hard_diff" or "div_diff"
+            diff = mapinf and mapinf[mapinf_diff] or 0
         else
             repeat
                 diff = math.random(roundv.diff1, roundv.diff2)

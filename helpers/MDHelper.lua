@@ -363,6 +363,8 @@ do
     end
 
     MDHelper.getMapInfo = function(mapcode)
+        mapcode = int_mapcode(mapcode)
+        if not mapcode then return end
         local maps = MDHelper.getTable("maps")
         for i = 1, #maps do
             if maps[i].code == mapcode then
