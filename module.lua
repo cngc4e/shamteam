@@ -183,6 +183,21 @@ local function table_copy(tbl)
     return out
 end
 
+local function dumptbl (tbl, indent)
+    if not indent then indent = 0 end
+    for k, v in pairs(tbl) do
+        formatting = string.rep("  ", indent) .. k .. ": "
+        if type(v) == "table" then
+            print(formatting)
+            dumptbl(v, indent+1)
+        elseif type(v) == 'boolean' then
+            print(formatting .. tostring(v))
+        else
+            print(formatting .. v)
+        end
+    end
+end
+
 local function tl(name, lang)
     local lang = translations[lang] and lang or "en"
     if translations[lang][name] then
@@ -291,6 +306,7 @@ do
     MDHelper.OP_ADD_BAN = 6
     MDHelper.OP_REMOVE_BAN = 7
     MDHelper.OP_REPLACE_MAPS = 8
+    MDHelper.OP_ADD_MODULE_LOG = 9
 
     -- Module data DB2 schemas
     local MD_SCHEMA = {
@@ -319,9 +335,13 @@ do
                         db2.UnsignedInt{ key="code", size=4 },
                     }},
                     [MDHelper.OP_UPDATE_MAP_HARD] = db2.Object{schema={
+                        db2.UnsignedInt{ key="code", size=4 },
+                        db2.UnsignedInt{ key="old_diff", size=1 },
                         db2.UnsignedInt{ key="diff", size=1 },
                     }},
                     [MDHelper.OP_UPDATE_MAP_DIV] = db2.Object{schema={
+                        db2.UnsignedInt{ key="code", size=4 },
+                        db2.UnsignedInt{ key="old_diff", size=1 },
                         db2.UnsignedInt{ key="diff", size=1 },
                     }},
                     [MDHelper.OP_ADD_BAN] = db2.Object{schema={
@@ -355,10 +375,18 @@ do
                     end
                 end
                 if found then
-                    return MDHelper.MERGE_NOTHING, "Map already exists in the database."
+                    return MDHelper.MERGE_NOTHING, "@"..self.mapcode.." already exists in the database."
                 end
                 maps[#maps+1] = {code=self.mapcode, hard_diff=0, div_diff=0, completed=0, rounds=0}
-                return MDHelper.MERGE_OK
+                return MDHelper.MERGE_OK, "@"..self.mapcode.." successfully added."
+            end,
+            logobject = function(self)
+                return {
+                    code = self.mapcode
+                }
+            end,
+            changelog = function(log)
+                return "Added @"..log.code
             end,
         },
         [MDHelper.OP_REMOVE_MAP] = {
@@ -376,51 +404,85 @@ do
                     end
                 end
                 if not found then
-                    return MDHelper.MERGE_NOTHING, "Map does not exist in the database."
+                    return MDHelper.MERGE_NOTHING, "@"..self.mapcode.."  does not exist in the database."
                 end
-                return MDHelper.MERGE_OK
+                return MDHelper.MERGE_OK, "@"..self.mapcode.." successfully removed."
+            end,
+            logobject = function(self)
+                return {
+                    code = self.mapcode
+                }
+            end,
+            changelog = function(log)
+                return "Removed @"..log.code
             end,
         },
         [MDHelper.OP_UPDATE_MAP_HARD] = {
             init = function(self, mapcode, diff)
                 self.mapcode = mapcode
-                self.diff = tonumber(diff)
+                self.diff = diff
             end,
             merge = function(self, db)
                 local maps = db.maps
                 local found = false
                 for i = 1, #maps do
                     if maps[i].code == self.mapcode then
+                        if not self.old_diff then
+                            self.old_diff = maps[i].hard_diff
+                        end
                         maps[i].hard_diff = self.diff
                         found = true
                         break
                     end
                 end
                 if not found then
-                    return MDHelper.MERGE_NOTHING, "Map does not exist in the database."
+                    return MDHelper.MERGE_NOTHING, "@"..self.mapcode.." does not exist in the database."
                 end
-                return MDHelper.MERGE_OK
+                return MDHelper.MERGE_OK, "@"..self.mapcode.." Hard difficulty updated to "..self.diff
+            end,
+            logobject = function(self)
+                return {
+                    code = self.mapcode,
+                    old_diff = self.old_diff or 0,
+                    diff = self.diff
+                }
+            end,
+            changelog = function(log)
+                return "Updated @"..log.code.." - Hard difficulty: "..log.old_diff.." -&gt; "..log.diff
             end,
         },
         [MDHelper.OP_UPDATE_MAP_DIV] = {
             init = function(self, mapcode, diff)
                 self.mapcode = mapcode
-                self.diff = tonumber(diff)
+                self.diff = diff
             end,
             merge = function(self, db)
                 local maps = db.maps
                 local found = false
                 for i = 1, #maps do
                     if maps[i].code == self.mapcode then
+                        if not self.old_diff then
+                            self.old_diff = maps[i].div_diff
+                        end
                         maps[i].div_diff = self.diff
                         found = true
                         break
                     end
                 end
                 if not found then
-                    return MDHelper.MERGE_NOTHING, "Map does not exist in the database."
+                    return MDHelper.MERGE_NOTHING, "@"..self.mapcode.." does not exist in the database."
                 end
-                return MDHelper.MERGE_OK
+                return MDHelper.MERGE_OK, "@"..self.mapcode.." Divine difficulty updated to "..self.diff
+            end,
+            logobject = function(self)
+                return {
+                    code = self.mapcode,
+                    old_diff = self.old_diff or 0,
+                    diff = self.diff
+                }
+            end,
+            changelog = function(log)
+                return "Updated @"..log.code.." - Divine difficulty: "..(log.old_diff or 0).." -&gt; "..log.diff
             end,
         },
         [MDHelper.OP_ADD_MAP_COMPLETION] = {
@@ -438,7 +500,7 @@ do
                     end
                 end
                 if not found then
-                    return MDHelper.MERGE_NOTHING, "Map does not exist in the database."
+                    return MDHelper.MERGE_NOTHING, "@"..self.mapcode.." does not exist in the database."
                 end
 
                 if self.completed then
@@ -447,6 +509,9 @@ do
                 found.rounds = found.rounds + 1
                 return MDHelper.MERGE_OK
             end,
+            logobject = function(self)
+                return nil
+            end
         },
         [MDHelper.OP_ADD_BAN] = {
             init = function(self, pn, reason)
@@ -462,15 +527,23 @@ do
                     end
                 end
                 if found then
-                    return MDHelper.MERGE_NOTHING, "Player is already banned."
+                    return MDHelper.MERGE_NOTHING, self.pn.." is already banned."
                 end
 
                 banned[#banned+1] = {
                     name = self.pn,
                     reason = self.reason,
-                    time = os.time()/1000
+                    time = math.floor(os.time()/1000)
                 }
-                return MDHelper.MERGE_OK
+                return MDHelper.MERGE_OK, self.pn.." has been added to the ban list."
+            end,
+            logobject = function(self)
+                return {
+                    name = self.pn
+                }
+            end,
+            changelog = function(log)
+                return "Permanently banned "..log.name
             end,
         },
         [MDHelper.OP_REMOVE_BAN] = {
@@ -490,7 +563,15 @@ do
                 if not found then
                     return MDHelper.MERGE_NOTHING, "No existing player was banned."
                 end
-                return MDHelper.MERGE_OK
+                return MDHelper.MERGE_OK, self.pn.." was removed from the ban list."
+            end,
+            logobject = function(self)
+                return {
+                    name = self.pn
+                }
+            end,
+            changelog = function(log)
+                return "Revoked permanent ban on "..log.name
             end,
         },
         [MDHelper.OP_REPLACE_MAPS] = {
@@ -501,25 +582,84 @@ do
                 db.maps = self.map_table
                 return MDHelper.MERGE_OK
             end,
+            logobject = function(self)
+                return {}
+            end,
+            changelog = function(log)
+                return "Mass update map database"
+            end,
+        },
+        [MDHelper.OP_ADD_MODULE_LOG] = {
+            init = function(self, committer, op_id, logobj)
+                local nlogobj = table_copy(logobj)
+                nlogobj.op_id = op_id
+                self.logobj = nlogobj
+                self.committer = committer
+                self.time = math.floor(os.time()/1000)
+            end,
+            merge = function(self, db)
+                local md_log = db.module_log
+                local entry = {
+                    committer = self.committer,
+                    time = self.time,
+                    op = self.logobj
+                }
+                md_log[#md_log+1] = entry
+                return MDHelper.MERGE_OK
+            end,
+            logobject = function(self)
+                return nil
+            end,
         },
     }
 
-    local get_table = function(tbl_name)
-        return db_cache[tbl_name]
-    end
-
-    local commit = function(pn, op_id, a1, a2, a3, a4)
+    MDHelper.commit = function(pn, op_id, a1, a2, a3, a4)
         local op = operations[op_id]
         if op then
             local op_mt = setmetatable({}, { __index = {
                 init = op.init,
-                merge = op.merge
+                merge = op.merge,
+                logobject = op.logobject,
+                op_id = op_id
             }})
             op_mt:init(a1, a2, a3, a4)
-            op_mt:merge(db_cache)
-            db_commits[#db_commits+1] = op_mt
+            local status, result = op_mt:merge(db_cache)
+            if status ~= MDHelper.MERGE_OK then
+                return status, result or "Merge unsuccessful"
+            else
+                local logobj = op_mt:logobject()
+                if logobj then
+                    -- add log
+                    MDHelper.commit(nil, MDHelper.OP_ADD_MODULE_LOG, pn, op_id, logobj)
+                end
+                db_commits[#db_commits+1] = op_mt
+                return status, result or ""
+            end
         else
-            return error("Invalid operation.")
+            return MDHelper.MERGE_FAIL, "Invalid operation."
+        end
+    end
+
+    MDHelper.getTable = function(tbl_name)
+        return db_cache[tbl_name]
+    end
+
+    MDHelper.getMapInfo = function(mapcode)
+        local maps = MDHelper.getTable("maps")
+        for i = 1, #maps do
+            if maps[i].code == mapcode then
+                return maps[i]
+            end
+        end
+        return nil
+    end
+
+    MDHelper.getChangelog = function(logobj)
+        if type(logobj) == "table" then
+            local op_id = logobj.op_id
+            if op_id and operations[op_id].changelog then
+                return operations[op_id].changelog(logobj)
+            end
         end
     end
 
@@ -539,7 +679,11 @@ do
             local commit_sz = #db_commits
             if commit_sz > 0 then
                 for i = 1, commit_sz do
-                    db_commits[i]:merge(new_db)
+                    local status, result = db_commits[i]:merge(new_db)
+                    print("new db: did "..db_commits[i].op_id)
+                    if status ~= MDHelper.MERGE_OK then
+                        print("Error occurred while merging on the new database: "..result or "No reason")
+                    end
                 end
                 save(new_db)
                 db_commits = {}
@@ -568,8 +712,6 @@ do
     --    loaded_callback = cb
     --end
 
-	MDHelper.getTable = get_table
-	MDHelper.commit = commit
     MDHelper.parse = parse
     --MDHelper.syncAsap = sync_asap  -- ?_?
     MDHelper.trySync = try_sync
@@ -1149,17 +1291,6 @@ do
     end 
 end
 
--- Module data query utils
-local GetMapInfo = function(mapcode)
-    local maps = MDHelper.getTable("maps")
-    for i = 1, #maps do
-        if maps[i].code == mapcode then
-            return maps[i]
-        end
-    end
-    return nil
-end
-
 keys = {
     [71] = {
         func = function(pn, enable) -- g (display GUI for shamans)
@@ -1507,7 +1638,7 @@ cmds = {
                 map = function(action, p1)
                     local actions = {
                         info = function()
-                            local map = GetMapInfo(roundv.mapinfo.code)
+                            local map = MDHelper.getMapInfo(roundv.mapinfo.code)
                             if not map then
                                 tfm.exec.chatMessage("<R>This map is not in rotation.", pn)
                                 return
@@ -1517,25 +1648,35 @@ cmds = {
                             tfm.exec.chatMessage(info, pn)
                         end,
                         hard = function()
-                            local map = GetMapInfo(roundv.mapinfo.code)
+                            local map = MDHelper.getMapInfo(roundv.mapinfo.code)
                             if not map then
                                 tfm.exec.chatMessage("<R>This map is not in rotation.", pn)
                                 return
                             end
-                            MDHelper.commit(pn, MDHelper.OP_UPDATE_MAP_HARD, map.code, p1)
+                            local diff = tonumber(p1)
+                            if not diff then
+                                tfm.exec.chatMessage("<R>Specify a valid difficulty number.", pn)
+                                return
+                            end
+                            MDHelper.commit(pn, MDHelper.OP_UPDATE_MAP_HARD, map.code, diff)
                             tfm.exec.chatMessage("Changing Hard difficulty of @"..map.code.." to "..p1, pn)
                         end,
                         div = function()
-                            local map = GetMapInfo(roundv.mapinfo.code)
+                            local map = MDHelper.getMapInfo(roundv.mapinfo.code)
                             if not map then
                                 tfm.exec.chatMessage("<R>This map is not in rotation.", pn)
                                 return
                             end
-                            MDHelper.commit(pn, MDHelper.OP_UPDATE_MAP_DIV, map.code, p1)
+                            local diff = tonumber(p1)
+                            if not diff then
+                                tfm.exec.chatMessage("<R>Specify a valid difficulty number.", pn)
+                                return
+                            end
+                            MDHelper.commit(pn, MDHelper.OP_UPDATE_MAP_DIV, map.code, diff)
                             tfm.exec.chatMessage("Changing Divine difficulty of @"..map.code.." to "..p1, pn)
                         end,
                         add = function()
-                            local map = GetMapInfo(roundv.mapinfo.code)
+                            local map = MDHelper.getMapInfo(roundv.mapinfo.code)
                             if map then
                                 tfm.exec.chatMessage("<R>This map is already in rotation.", pn)
                                 return
@@ -1544,7 +1685,7 @@ cmds = {
                             tfm.exec.chatMessage("Adding @"..map.code, pn)
                         end,
                         remove = function()
-                            local map = GetMapInfo(roundv.mapinfo.code)
+                            local map = MDHelper.getMapInfo(roundv.mapinfo.code)
                             if not map then
                                 tfm.exec.chatMessage("<R>This map is not in rotation.", pn)
                                 return
@@ -1570,6 +1711,13 @@ cmds = {
                     end]]
                 end,
                 history = function()
+                    local logs = MDHelper.getTable("module_log")
+                    tfm.exec.chatMessage("Change logs:", pn)
+                    for i = 1, #logs do
+                        local log = logs[i]
+                        local log_str = MDHelper.getChangelog(log.op) or ""
+                        tfm.exec.chatMessage(string.format("<ROSE>\t- %s\t%s\t%s", log.committer, os.date("%d/%m/%y %X", log.time*1000), log_str), pn)
+                    end
                     --sWindow.open(WINDOW_DB_HISTORY, pn)
                 end,
             }
