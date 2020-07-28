@@ -110,6 +110,12 @@ local TSM_DIV = 2
 -- Room
 local DEFAULT_MAX_PLAYERS = 50
 
+-- Shaman objects / summons
+local O_BTYPE_ARROW = 0
+local O_BTYPE_BALLOON = 28
+
+local O_TYPE_TOTEM = 44
+
 -- Module ID (this is per-Lua dev, change it accordingly and careful not to let your data get overridden!)
 local MODULE_ID = 2
 
@@ -190,12 +196,13 @@ local function int_mapcode(code)
     end
 end
 
-local function tl(name, lang)
-    local lang = translations[lang] and lang or "en"
-    if translations[lang][name] then
-        return translations[lang][name]
+local function tl(kname, pn)
+    local pref_lang = players[pn] and players[pn].lang or "en"
+    local lang = translations[pref_lang] and pref_lang or "en"
+    if translations[lang][kname] then
+        return translations[lang][kname]
     else
-        return name
+        return kname
     end
 end
 
@@ -447,23 +454,23 @@ do
                 end
                 for i, v in pairs(tabs) do
                     local iden, tl_key = v[1], v[2]
-                    local translated = tl(tl_key, players[pn].lang)
+                    local translated = tl(tl_key, pn)
                     local opacity = (iden == tab) and 0 or 1 
                     ui.addTextArea(WINDOW_HELP+1+i, GUI_BTN.."<font size='2'><br><font size='12'><p align='center'><a href='event:help!"..iden.."'>"..translated.."\n</a>",pn,92+((i-1)*130),50,100,24,0x666666,0x676767,opacity,true)
                 end
                 p_data.tab = tab
 
                 if tab == "Welcome" then
-                    local text = string.format(tl("help_content_welcome", players[pn].lang), GUI_BTN, LINK_DISCORD)
+                    local text = string.format(tl("help_content_welcome", pn), GUI_BTN, LINK_DISCORD)
                     ui.addTextArea(WINDOW_HELP+21,text,pn,88,95,625,nil,0,0,0,true)
                 elseif tab == "Rules" then
-                    local text = tl("help_content_rules", players[pn].lang)
+                    local text = tl("help_content_rules", pn)
                     ui.addTextArea(WINDOW_HELP+31,text,pn,88,95,625,nil,0,0,0,true)
                 elseif tab == "Commands" then
-                    local text = tl("help_content_commands", players[pn].lang)
+                    local text = tl("help_content_commands", pn)
                     ui.addTextArea(WINDOW_HELP+41,text,pn,88,95,625,nil,0,0,0,true)
                 elseif tab == "Contributors" then
-                    local text = tl("help_content_contributors", players[pn].lang)
+                    local text = tl("help_content_contributors", pn)
                     ui.addTextArea(WINDOW_HELP+51,text,pn,88,95,625,nil,0,0,0,true)
                     --local img_id = tfm.exec.addImage("172cde7e326.png", "&1", 571, 180, pn)
                     --p_data.images[tab] = {img_id}
@@ -1169,7 +1176,7 @@ callbacks = {
     end,
     unafk = function(pn)
         SetSpectate(pn, false)
-        tfm.exec.chatMessage(tl("unafk_message", players[pn].lang), pn)
+        tfm.exec.chatMessage(tl("unafk_message", pn), pn)
     end,
     link = function(pn, link_id)
         -- Do not print out raw text from players! Use predefined IDs instead.
@@ -1584,6 +1591,7 @@ function eventNewGame()
         shaman_turn = 1,
         undo_count = 0,
         sballoon_count = 0,
+        arrow_count = 0,
         spawnlist = {},
         difficulty = diff,
         phase = 0,
@@ -1741,7 +1749,7 @@ function eventNewPlayer(pn)
     pL.room:add(pn)
     pL.dead:add(pn)
 
-    tfm.exec.chatMessage("\t<VP>Ξ Welcome to <b>Team Shaman (TSM)</b> v0.7 Alpha! Ξ\n<J>TSM is a building module where dual shamans take turns to spawn objects.\nPress H for more information.\n<R>NOTE: <VP>Module is in early stages of development and may see incomplete or broken features.", pn)
+    tfm.exec.chatMessage("\t<VP>Ξ Welcome to <b>Team Shaman (TSM)</b> v0.8 Alpha! Ξ\n<J>TSM is a building module where dual shamans take turns to spawn objects.\nPress H for more information.\n<R>NOTE: <VP>Module is in early stages of development and may see incomplete or broken features.", pn)
 
     tfm.exec.setPlayerScore(pn, 0)
 
@@ -1788,7 +1796,7 @@ end
 
 function eventSummoningStart(pn, type, xPos, yPos, angle)
     roundv.startsummon = true  -- workaround b/2
-    if type == 44 then  -- totems are banned; TODO: need more aggressive ban since this can be bypassed with (forced) lag
+    if type == O_TYPE_TOTEM then  -- totems are banned; TODO: need more aggressive ban since this can be bypassed with (forced) lag
         local player = room.playerList[pn]
 		local x, y = player.x, player.y
         tfm.exec.setShamanMode(pn, roundv.mode == TSM_HARD and 1 or 2)
@@ -1807,40 +1815,55 @@ function eventSummoningEnd(pn, type, xPos, yPos, angle, desc)
             tfm.exec.moveObject(desc.id, xPos, yPos, false, 0, 0, false, angle, false)
         end
         if not roundv.lobby then
-            if type == 0 then  -- arrow
-                --points deduct for tdm
-            elseif desc.baseType == 28 then  -- balloon
-                if band(roundv.mapinfo.flags, MP_NOBALLOON) ~= 0 then
-                    tfm.exec.removeObject(desc.id)
-                elseif not desc.ghost and roundv.sballoon_count >= 3 then
-                    tfm.exec.removeObject(desc.id)
-                    tfm.exec.chatMessage("<J>Ξ You may not spawn any more solid balloons.", pn)
+            if type == O_BTYPE_ARROW then
+                if roundv.mode == TSM_DIV then
+                    -- TODO: points deduct for tdm
+                    roundv.arrow_count = roundv.arrow_count + 1
+                    tfm.exec.chatMessage(string.format("<ROSE>%s used an arrow! (%s used in total)", pDisp(pn), roundv.arrow_count))
                 end
+            end
+            local rightful_turn = roundv.shaman_turn
+            if pn ~= roundv.shamans[rightful_turn] then
+                tfm.exec.removeObject(desc.id)
+                tfm.exec.chatMessage("<J>Ξ It is not your turn to spawn yet ya dummy!", pn)
+                --points deduct
             else
-                local rightful_turn = roundv.shaman_turn
-                if pn ~= roundv.shamans[rightful_turn] then
-                    tfm.exec.removeObject(desc.id)
-                    tfm.exec.chatMessage("<J>Ξ It is not your turn to spawn yet ya dummy!", pn)
-                    --points deduct
+                local within_range = false
+                if #roundv.shamans ~= 2 or roundv.mode == TSM_DIV then
+                    within_range = true
                 else
-                    if #roundv.shamans ~= 2 then return end
                     local s1, s2 = room.playerList[roundv.shamans[1]], room.playerList[roundv.shamans[2]]
-                    if roundv.mode == TSM_HARD and not pythag(s1.x, s1.y, s2.x, s2.y, 60) then  -- TODO: lowerSyncDelay for more accurate position
-                        local other = rightful_turn == 1 and 2 or 1
-                        tfm.exec.removeObject(desc.id)
-                        tfm.exec.chatMessage("<J>Ξ Your partner needs to be within your spawning range.", pn)
-                        tfm.exec.chatMessage("<J>Ξ You need to be within your partner's spawning range.", roundv.shamans[other])
-                    else
-                        roundv.shaman_turn = rightful_turn == 1 and 2 or 1
-                        UpdateTurnUI()
-                        UpdateCircle()
+                    within_range = pythag(s1.x, s1.y, s2.x, s2.y, 60)  -- TODO: lowerSyncDelay for more accurate position
+                end
+                if not within_range then
+                    local other = rightful_turn == 1 and 2 or 1
+                    tfm.exec.removeObject(desc.id)
+                    tfm.exec.chatMessage("<J>Ξ Your partner needs to be within your spawning range.", pn)
+                    tfm.exec.chatMessage("<J>Ξ You need to be within your partner's spawning range.", roundv.shamans[other])
+                else
+                    local go_next_turn = true
+                    if desc.baseType == O_BTYPE_BALLOON then
+                        if band(roundv.mapinfo.flags, MP_NOBALLOON) ~= 0 then
+                            tfm.exec.removeObject(desc.id)
+                        elseif not desc.ghost and roundv.sballoon_count >= 3 then
+                            tfm.exec.removeObject(desc.id)
+                            tfm.exec.chatMessage("<J>Ξ You may not spawn any more solid balloons.", pn)
+                            go_next_turn = false
+                        end
+                    end
+                    if go_next_turn then
+                        if #roundv.shamans == 2 then
+                            roundv.shaman_turn = rightful_turn == 1 and 2 or 1
+                            UpdateTurnUI()
+                            UpdateCircle()
+                        end
 
                         local sl = roundv.spawnlist[pn]
                         sl[sl._len+1] = desc.id
                         sl._len = sl._len + 1
 
                         -- track solid balloons
-                        if desc.baseType == 28 and not desc.ghost and roundv.sballoon_count < 3 then
+                        if desc.baseType == O_BTYPE_BALLOON and not desc.ghost and roundv.sballoon_count < 3 then
                             roundv.sballoon_count = roundv.sballoon_count + 1
                             tfm.exec.chatMessage(string.format("<ROSE>%s used a solid balloon! (%s left)", pDisp(pn), 3 - roundv.sballoon_count))
                         end
