@@ -229,7 +229,8 @@ do
             end,
             logobject = function(self)
                 return nil
-            end
+            end,
+            PASSIVE_ON_NOR = true
         },
         [MDHelper.OP_ADD_BAN] = {
             init = function(self, pn, reason)
@@ -347,10 +348,14 @@ do
             else
                 local logobj = op_mt:logobject()
                 if logobj then
-                    -- add log
+                    -- add module log
                     MDHelper.commit(nil, MDHelper.OP_ADD_MODULE_LOG, pn, op_id, logobj)
                 end
-                db_commits[#db_commits+1] = { op_mt, pn }
+                -- don't schedule and sync commit if the operation specifies to be passive in non-official rooms
+                if is_official_room or not op_mt.PASSIVE_ON_NOR then
+                    -- Schedule the commit to be done again during the next syncing
+                    db_commits[#db_commits+1] = { op_mt, pn }
+                end
                 return status, result or ""
             end
         else
@@ -389,7 +394,11 @@ do
         print("module data save")
     end
 
-    local parse = function(file, data)
+    MDHelper.getMdLoaded = function()
+        return module_data_loaded
+    end
+
+    MDHelper.eventFileLoaded = function(file, data)
         if tonumber(file) ~= FILE_NUMBER then return end
         if #data == 0 then
 			print("init and save default db")
@@ -421,7 +430,7 @@ do
         print("module data load")
     end
 
-    local on_saved = function(file)
+    MDHelper.eventFileSaved = function(file)
         if tonumber(file) ~= FILE_NUMBER then return end
         for name in pairs(inform_filesave) do
             tfm.exec.chatMessage("<J>All changes have been successfully saved to the database!", name)
@@ -429,19 +438,10 @@ do
         inform_filesave = {}
     end
 
-    local try_sync = function()
+    MDHelper.trySync = function()
         if not next_module_sync or os.time() >= next_module_sync then
             system.loadFile(FILE_NUMBER)
             next_module_sync = os.time() + FILE_LOAD_INTERVAL
         end
     end
-
-    local get_md_loaded = function()
-        return module_data_loaded
-    end
-
-    MDHelper.parse = parse
-    MDHelper.onSaved = on_saved
-    MDHelper.trySync = try_sync
-    MDHelper.getMdLoaded = get_md_loaded
 end

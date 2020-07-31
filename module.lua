@@ -9,6 +9,7 @@ local pd_loaded = {}  -- table of bool flags denoting players in which have succ
 local roundv = {}  -- data spanning the lifetime of the round
 local new_game_vars = {}  -- data spanning the lifetime till the next eventNewGame
 local mapcodes = {}
+local is_official_room = false
 local module_started = false
 
 @include translations-gen/*.lua
@@ -118,6 +119,7 @@ local O_TYPE_TOTEM = 44
 
 -- Module ID (this is per-Lua dev, change it accordingly and careful not to let your data get overridden!)
 local MODULE_ID = 2
+local MODULE_ROOMNAME = "shamteam"
 
 -- Default player data
 local DEFAULT_PD = {
@@ -1502,7 +1504,7 @@ function eventChatCommand(pn, msg)
 end
 
 function eventFileLoaded(file, data)
-    local success, result = pcall(MDHelper.parse, file, data)
+    local success, result = pcall(MDHelper.eventFileLoaded, file, data)
     if not success then
         print(string.format("Exception encountered in eventFileLoaded: %s", result))
     end
@@ -1514,7 +1516,7 @@ function eventFileParsed()
 end
 
 function eventFileSaved(file)
-    MDHelper.onSaved(file)
+    MDHelper.eventFileSaved(file)
 end
 
 function eventPlayerDataLoaded(pn, data)
@@ -1749,7 +1751,10 @@ function eventNewPlayer(pn)
     pL.room:add(pn)
     pL.dead:add(pn)
 
-    tfm.exec.chatMessage("\t<VP>Ξ Welcome to <b>Team Shaman (TSM)</b> v0.8 Alpha! Ξ\n<J>TSM is a building module where dual shamans take turns to spawn objects.\nPress H for more information.\n<R>NOTE: <VP>Module is in early stages of development and may see incomplete or broken features.", pn)
+    tfm.exec.chatMessage("\t<VP>Ξ Welcome to <b>Team Shaman (TSM)</b> v0.9 Alpha! Ξ\n<J>TSM is a building module where dual shamans take turns to spawn objects.\nPress H for more information.\n<R>NOTE: <VP>Module is in early stages of development and may see incomplete or broken features.", pn)
+    if not is_official_room then
+        tfm.exec.chatMessage(string.format("<R>NOTE: The module is running in Tribehouse mode, stats are not saved here. Head to any %s room for stats to save!", MODULE_ROOMNAME), pn)
+    end
 
     tfm.exec.setPlayerScore(pn, 0)
 
@@ -1883,7 +1888,7 @@ function eventSummoningEnd(pn, type, xPos, yPos, angle, desc)
                 tfm.exec.chatMessage("<ROSE>Hey there, you appear to have lagged. You should consider enabling AntiLag via the options menu (press O).", pn)
             end
         end
-        tfm.exec.chatMessage("[dbg] the sync is "..pn.." with a ping of "..(ping or "N/A").." ms")
+        print("[dbg] the sync is "..pn.." with a ping of "..(ping or "N/A").." ms")
     end
 end
 
@@ -1900,12 +1905,19 @@ function eventTextAreaCallback(id, pn, cb)
     end
 end
 
+local IsOfficialRoom = function(name)
+    local isof = name:find("^%w-%-#"..MODULE_ROOMNAME)
+    if not isof then isof = name:find("^*#"..MODULE_ROOMNAME) end
+    return isof
+end
+
 local init = function()
     print("Module is starting...")
     for _,v in ipairs({'AllShamanSkills','AutoNewGame','AutoScore','AutoTimeLeft','PhysicalConsumables'}) do
         tfm.exec['disable'..v](true)
     end
     system.disableChatCommandDisplay(nil,true)
+    is_official_room = IsOfficialRoom(room.name)
     for name in pairs(room.playerList) do eventNewPlayer(name) end
     tfm.exec.setRoomMaxPlayers(DEFAULT_MAX_PLAYERS)
     tfm.exec.setRoomPassword("")
