@@ -229,7 +229,7 @@ end
 
 local function pDisp(pn)
     -- TODO: check if the player has the same name as another existing player in the room.
-    return pn and (pn:find('#') and pn:sub(1,-6)) or "N/A"
+    return pn and (pn:find('#') and pn:sub(1,-6) or pn) or "N/A"
 end
 
 local function pythag(x1, y1, x2, y2, r)
@@ -1361,7 +1361,7 @@ SetSpectate = function(pn, b)
         tfm.exec.setPlayerScore(pn, -5)
         ui.addTextArea(TA_SPECTATING, GUI_BTN.."<font size='14'><p align='center'><a href='event:unafk'>You have entered spectator mode.\nClick here to exit spectator mode.", pn, 190, 355, 420, nil, 1, 0, .7, true)
     elseif pL.spectator[pn] then
-        pL.spectator[pn]:remove(pn)
+        pL.spectator:remove(pn)
         players[pn].internal_score = 0
         tfm.exec.setPlayerScore(pn, 0)
         ui.removeTextArea(TA_SPECTATING, pn)
@@ -1751,7 +1751,7 @@ function eventNewPlayer(pn)
     pL.room:add(pn)
     pL.dead:add(pn)
 
-    tfm.exec.chatMessage("\t<VP>Ξ Welcome to <b>Team Shaman (TSM)</b> v0.9 Alpha! Ξ\n<J>TSM is a building module where dual shamans take turns to spawn objects.\nPress H for more information.\n<R>NOTE: <VP>Module is in early stages of development and may see incomplete or broken features.", pn)
+    tfm.exec.chatMessage("\t<VP>Ξ Welcome to <b>Team Shaman (TSM)</b> v0.10 Alpha! Ξ\n<J>TSM is a building module where dual shamans take turns to spawn objects.\nPress H for more information.\n<R>NOTE: <VP>Module is in early stages of development and may see incomplete or broken features.", pn)
     if not is_official_room then
         tfm.exec.chatMessage(string.format("<R>NOTE: The module is running in Tribehouse mode, stats are not saved here. Head to any %s room for stats to save!", MODULE_ROOMNAME), pn)
     end
