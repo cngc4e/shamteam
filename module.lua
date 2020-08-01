@@ -1906,9 +1906,15 @@ function eventTextAreaCallback(id, pn, cb)
 end
 
 local IsOfficialRoom = function(name)
-    local isof = name:find("^%w-%-#"..MODULE_ROOMNAME)
-    if not isof then isof = name:find("^*#"..MODULE_ROOMNAME) end
-    return isof
+    local normalised_matches = {
+        "^%w-%-#(.-)$",  -- public room, in form of xx-#module(0args)?
+        "^*#(.-)$"  -- private room, in form of *#module(0args)?
+    }
+    for i = 1, #normalised_matches do
+        local x = name:match(normalised_matches[i])
+        if x then name = x break end
+    end
+    return name and (name == MODULE_ROOMNAME or name:find("^"..MODULE_ROOMNAME.."%d+.-$"))
 end
 
 local init = function()
